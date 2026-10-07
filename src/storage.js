@@ -14,7 +14,8 @@ const DEFAULT_CONFIG = {
 
 const DEFAULT_CREDENTIALS = {
     apiKey: '',
-    groqApiKey: ''
+    groqApiKey: '',
+    openrouterKey: ''
 };
 
 const DEFAULT_PREFERENCES = {
@@ -247,6 +248,10 @@ function getGroqApiKey() {
 
 function setGroqApiKey(groqApiKey) {
     return setCredentials({ groqApiKey });
+}
+
+function getOpenRouterApiKey() {
+    return (getCredentials().openrouterKey || '').trim();
 }
 
 // ============ PREFERENCES ============
@@ -554,6 +559,7 @@ module.exports = {
     setApiKey,
     getGroqApiKey,
     setGroqApiKey,
+    getOpenRouterApiKey,
 
     // Preferences
     getPreferences,

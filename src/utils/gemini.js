@@ -6,6 +6,7 @@ const { getSystemPrompt } = require('./prompts');
 const {
     getApiKey,
     getGroqApiKey,
+    getOpenRouterApiKey,
     incrementCharUsage,
     getModelForToday,
     getPreferences,
@@ -32,6 +33,7 @@ const { LiveAudioGapFiller } = require('./liveAudioGapFiller');
 const { LiveTurnWatchdog } = require('./liveTurnWatchdog');
 const { formatLiveAnswerText } = require('./answerFormatting');
 const { nextVoiceQuestion, questionText } = require('./questionMerge');
+const { streamOpenRouterAnswer, answerWithFallback, OPENROUTER_ANSWER_MODEL } = require('./answerModel');
 
 // Lazy-loaded to avoid circular dependency (localai.js imports from gemini.js)
 let _localai = null;
@@ -457,8 +459,9 @@ function composeUserTurn(text) {
 }
 
 // Gemini Live can only answer by speaking, and the transcript of that speech gives short, unformatted
-// answers. In BYOK mode Live listens and transcribes, and a text model writes every answer shown.
-const ANSWER_MODEL = 'gemini-3.8-flash';
+// answers. In BYOK mode Live listens and transcribes, and a text model writes every answer shown:
+// GPT-6 Astra through OpenRouter when that key is saved (answerModel.js), otherwise Gemini Flash.
+const GEMINI_ANSWER_MODEL = 'gemini-3.8-flash';
 const ANSWER_MAX_OUTPUT_TOKENS = 8192;
 // 3.x sends the question transcript in snapshots; wait for it to settle before answering.
 const ANSWER_DEBOUNCE_MS = 400;
@@ -468,6 +471,8 @@ const ANSWER_SEQUENCE_STEP = 1000000;
 let answerClient = null;
 let answerClientKey = '';
 let answerGeneration = 0;
+// Cancels the request of an answer that a newer question replaced, so its tokens stop being billed.
+let answerAbort = null;
 let answerTimer = null;
 let answerSequenceBase = 0;
 let liveInputTurnSeq = 0;
@@ -490,6 +495,8 @@ function getTextModelClient(apiKey) {
 
 function cancelTextAnswers() {
     answerGeneration++;
+    answerAbort?.abort();
+    answerAbort = null;
     clearTimeout(answerTimer);
     answerTimer = null;
     lastVoiceQuestion = null;
@@ -509,49 +516,88 @@ function scheduleAnswerForVoiceTurn() {
     }, ANSWER_DEBOUNCE_MS);
 }
 
+async function streamGeminiAnswer({ apiKey, userText, imageJpeg, signal, onText }) {
+    const parts = [];
+    if (imageJpeg) parts.push({ inlineData: { mimeType: 'image/jpeg', data: imageJpeg } });
+    parts.push({ text: userText });
+    const stream = await getTextModelClient(apiKey).models.generateContentStream({
+        model: GEMINI_ANSWER_MODEL,
+        contents: [{ role: 'user', parts }],
+        config: {
+            systemInstruction: currentSystemPrompt || 'You are a helpful assistant.',
+            thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+            maxOutputTokens: ANSWER_MAX_OUTPUT_TOKENS,
+            abortSignal: signal,
+        },
+    });
+    let text = '';
+    for await (const chunk of stream) {
+        if (chunk.text) {
+            text += chunk.text;
+            onText(text);
+        }
+    }
+    return { text };
+}
+
 async function sendTextAnswer(question, { turnId = createTurnId('answer') } = {}) {
     const apiKey = getApiKey();
     if (!apiKey || !question.trim()) return;
-    // The newest question wins: older answer streams stop updating.
+    // The newest question wins: the older answer stops updating and its request is cancelled.
+    answerAbort?.abort();
+    const abort = new AbortController();
+    answerAbort = abort;
     const generation = ++answerGeneration;
     answerSequenceBase += ANSWER_SEQUENCE_STEP;
     const answer = createAnswerStream('answer', { turnId, sequenceBase: answerSequenceBase });
     const records = [...conversationHistory, ...screenAnalysisHistory].sort((a, b) => a.timestamp - b.timestamp);
     const context = buildRelevantContext({ query: question, summary: currentSummary, records }).slice(-ANSWER_CONTEXT_CHARS);
-    const parts = [];
-    if (lastScreenshotJpeg && needsVisualContext(question)) {
-        parts.push({ inlineData: { mimeType: 'image/jpeg', data: lastScreenshotJpeg } });
-    }
-    parts.push({ text: `${context ? `Conversation so far:\n${context}\n\n` : ''}Question:\n${question}` });
+    const imageJpeg = lastScreenshotJpeg && needsVisualContext(question) ? lastScreenshotJpeg : null;
+    const userText = `${context ? `Conversation so far:\n${context}\n\n` : ''}Question:\n${question}`;
+    const startedAt = Date.now();
+    let firstTextAt = 0;
+    const onText = text => {
+        if (generation !== answerGeneration) return;
+        firstTextAt ||= Date.now();
+        answer.update(text);
+    };
+    const gemini = ({ signal, onText }) => streamGeminiAnswer({ apiKey, userText, imageJpeg, signal, onText });
+    const openRouterKey = getOpenRouterApiKey();
     sendToRenderer('update-status', 'Answering...');
 
     try {
-        const stream = await getTextModelClient(apiKey).models.generateContentStream({
-            model: ANSWER_MODEL,
-            contents: [{ role: 'user', parts }],
-            config: {
-                systemInstruction: currentSystemPrompt || 'You are a helpful assistant.',
-                thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-                maxOutputTokens: ANSWER_MAX_OUTPUT_TOKENS,
-            },
-        });
-        let text = '';
-        for await (const chunk of stream) {
-            if (generation !== answerGeneration) return;
-            if (chunk.text) {
-                text += chunk.text;
-                answer.update(text);
-            }
-        }
-        if (generation !== answerGeneration || !text.trim()) return;
-        answer.complete(text.trim());
-        recordConversationTurn(question, text);
+        const result = openRouterKey
+            ? await answerWithFallback({
+                  primary: ({ signal, onText }) =>
+                      streamOpenRouterAnswer({
+                          apiKey: openRouterKey,
+                          systemPrompt: currentSystemPrompt || 'You are a helpful assistant.',
+                          userText,
+                          imageJpeg,
+                          maxTokens: ANSWER_MAX_OUTPUT_TOKENS,
+                          signal,
+                          onText,
+                      }),
+                  fallback: gemini,
+                  signal: abort.signal,
+                  onText,
+              })
+            : { ...(await gemini({ signal: abort.signal, onText })), usedFallback: false };
+        if (generation !== answerGeneration || !result.text.trim()) return;
+        if (result.primaryError) console.warn(`OpenRouter answer failed (${result.primaryError.message}); Gemini answered instead`);
+        const model = openRouterKey && !result.usedFallback ? OPENROUTER_ANSWER_MODEL : GEMINI_ANSWER_MODEL;
+        const cost = result.cost ? `, $${result.cost.toFixed(4)}` : '';
+        console.log(`[answer] ${model}: first text ${firstTextAt - startedAt} ms, done ${Date.now() - startedAt} ms${cost}`);
+        answer.complete(result.text.trim());
+        recordConversationTurn(question, result.text);
         sendToRenderer('update-status', 'Listening...');
     } catch (error) {
-        console.error('Text answer failed:', error.message);
         if (generation !== answerGeneration) return;
+        console.error('Text answer failed:', error.message);
         liveAnswerFallbackPending = true;
         sendToRenderer('update-status', `Answer failed: ${error.message}`);
+    } finally {
+        if (answerAbort === abort) answerAbort = null;
     }
 }
 

@@ -491,7 +491,7 @@ export class MainView extends LitElement {
         _token: { state: true },
         _geminiKey: { state: true },
         _groqKey: { state: true },
-        _openaiKey: { state: true },
+        _openrouterKey: { state: true },
         _tokenError: { state: true },
         _keyError: { state: true },
         // Local AI state
@@ -514,7 +514,7 @@ export class MainView extends LitElement {
         this._token = '';
         this._geminiKey = '';
         this._groqKey = '';
-        this._openaiKey = '';
+        this._openrouterKey = '';
         this._tokenError = false;
         this._keyError = false;
         this._showLocalHelp = false;
@@ -544,7 +544,7 @@ export class MainView extends LitElement {
             this._token = creds.cloudToken || '';
             this._geminiKey = await cheatingDaddy.storage.getApiKey().catch(() => '') || '';
             this._groqKey = await cheatingDaddy.storage.getGroqApiKey().catch(() => '') || '';
-            this._openaiKey = creds.openaiKey || '';
+            this._openrouterKey = creds.openrouterKey || '';
 
             // Load local AI settings
             this._ollamaHost = prefs.ollamaHost || 'http://127.0.0.1:11434';
@@ -719,11 +719,11 @@ export class MainView extends LitElement {
         this.requestUpdate();
     }
 
-    async _saveOpenaiKey(val) {
-        this._openaiKey = val;
+    async _saveOpenRouterKey(val) {
+        this._openrouterKey = val;
         try {
             const creds = await cheatingDaddy.storage.getCredentials().catch(() => ({}));
-            await cheatingDaddy.storage.setCredentials({ ...creds, openaiKey: val });
+            await cheatingDaddy.storage.setCredentials({ ...creds, openrouterKey: val });
         } catch (e) {}
         this.requestUpdate();
     }
@@ -872,6 +872,19 @@ export class MainView extends LitElement {
                 />
                 <div class="form-hint">
                     <span class="link" @click=${() => this.onExternalLink('https://aistudio.google.com/apikey')}>Get Gemini key</span>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label">OpenRouter API Key</label>
+                <input
+                    type="password"
+                    placeholder="Optional, GPT-6 Astra writes the answers"
+                    .value=${this._openrouterKey}
+                    @input=${e => this._saveOpenRouterKey(e.target.value)}
+                />
+                <div class="form-hint">
+                    <span class="link" @click=${() => this.onExternalLink('https://openrouter.ai/settings/keys')}>Get OpenRouter key</span>
                 </div>
             </div>
 

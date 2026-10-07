@@ -17,6 +17,7 @@
         "src/utils/historyStore.js",
         "src/utils/answerEvents.js",
         "src/utils/questionMerge.js",
+        "src/utils/answerModel.js",
         "src/utils/liveTurnWatchdog.js",
         "src/utils/windowBounds.js",
         "src/utils/geminiLiveTransport.js",
