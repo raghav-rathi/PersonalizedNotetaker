@@ -1,0 +1,528 @@
+{
+    "summary": "Fork master (8c49d85) sits on v0.7.0 (5dfdc12) plus 15 fork-only commits. It has none of the 7 upstream-only commits that make up v0.8.0. Upstream's last Windows window change, 3cccc36, does almost nothing on win32: it only makes alwaysOnTop and visible-on-all-workspaces conditional for non-win32. Not having it does not explain a Windows failure.\n\nOn the fork side, five commits rewrite Windows code paths: 1a26363, 79d63b2, 133406a, 309fadf and 17e6740. They add an opaque Windows window, an Alt-tap hide that uses uiohook-napi, a tray icon, renderer crash recovery, and a new AudioWorklet → 'send-audio-frame' audio path. They also move Electron from 30.5.1 to 44.3.0. The fork's own report says none of this has been run on Windows (docs/windows-performance-report.md: 'Windows visibility and two-hour readiness remain unverified').\n\nThe key structural fact: on this Mac, the saved preferences have providerMode 'byok' and audioMode 'speaker_only'. So the Mac uses the SystemAudioDump main-process path and never runs the renderer getDisplayMedia/AudioWorklet path. That renderer path is the only audio path on Windows. In short, the setup that works on Mac shares almost no capture code with what runs on Windows.\n\nThe strongest code-backed causes, in order:\n1. On a fresh profile, the fork defaults providerMode to 'cloud' (wss://api.cheatingdaddy.com, cloud token required). Upstream defaults to 'byok' and converts 'cloud' to 'byok' (cdedc66). A new Windows machine has no preferences.json, so Start fails with 'Cloud token is required' unless the user switches to the BYOK tab.\n2. The fork's Live gap filler (its fix for Gemini 3.8 Live not closing turns) is started only inside startMacOSAudioCapture. Windows audio is never covered and sends exact digital zeros during silence, which the fork deliberately avoids on Mac. Turns may never complete, so no answers appear.\n3. The display-media handler has no error path. If getDisplayMedia hangs, the session controller stays in 'starting'. This code is the same upstream, but only Windows/Linux reach it.\n4. Local mode on Windows still uses transformers.js with device:'auto', which crashes on Windows (upstream #239). Upstream replaced this stack in 800df4d.\n\nThe fork still calls the deprecated model 'gemma-3-27b-it' (gemini.js:933/954, storage.js:315/335), which 998a056 renamed. It is only used in the non-Live Gemma fallback, not in the Live path that works on Mac.\n\nNo static Windows-only launch blocker was found: logo.ico is a valid ICO, the uiohook-napi win32-x64 prebuild is present, and the renderer require path was fixed in 133406a. The git+ssh @electron/node-gyp lock entry is identical upstream.",
+    "commits": [
+        {
+            "sha": "3cccc36",
+            "side": "upstream-only",
+            "date": "2026-07-23",
+            "subject": "fix: refine window behavior",
+            "files": ["src/components/app/CheatingDaddyApp.js", "src/components/views/MainView.js", "src/utils/window.js"],
+            "whatChanged": "window.js: BrowserWindow alwaysOnTop becomes `process.platform === 'win32'`. setVisibleOnAllWorkspaces plus setAlwaysOnTop(true,'screen-saver',1) now run only on win32 (screen-saver moved before setSkipTaskbar). On non-win32 the 'view-changed' handler turns always-on-top and all-workspaces on only for the 'assistant' (live) view. CSS: app overflow hidden, border-radius 12px, drag bar z-index 20000→9999; removes the local-AI download interaction blocker.",
+            "windowsRelevance": "low",
+            "notes": "Net win32 behavior is unchanged: Windows was already alwaysOnTop with the screen-saver level. Only the order of calls changes. The fork replaced this whole area with its own Windows logic and is always-on-top on every platform."
+        },
+        {
+            "sha": "452cf2d",
+            "side": "upstream-only",
+            "date": "2026-07-23",
+            "subject": "bump version to 0.8.0",
+            "files": ["package.json", "package-lock.json"],
+            "whatChanged": "Version 0.7.0 → 0.8.0.",
+            "windowsRelevance": "none",
+            "notes": "Fork package.json is still 0.7.0, so storage.initializeStorage version checks see 0.7.0."
+        },
+        {
+            "sha": "800df4d",
+            "side": "upstream-only",
+            "date": "2026-07-23",
+            "subject": "yay",
+            "files": [
+                "forge.config.js",
+                "package.json",
+                "package-lock.json",
+                "src/components/app/CheatingDaddyApp.js",
+                "src/components/views/MainView.js",
+                "src/index.js",
+                "src/storage.js",
+                "src/utils/gemini.js",
+                "src/utils/localai.js",
+                "src/utils/native-ai-runtime.js",
+                "src/utils/renderer.js"
+            ],
+            "whatChanged": "Replaces local AI (Ollama + @huggingface/transformers/ONNX Whisper) with a native llama.cpp/whisper.cpp runtime (new native-ai-runtime.js, 383 lines; it spawns server binaries, including Windows .exe builds published with v0.7.0). Removes @huggingface/transformers and ollama from dependencies, which drops onnxruntime/sharp/@img win32 packages from the lock. forge asar goes from an unpack list to `asar: true`. index.js before-quit calls localai.closeLocalSession(). Renderer local-init signature changes and cancel-local-initialization is added.",
+            "windowsRelevance": "medium",
+            "notes": "Windows-relevant for local mode and package size: the v0.8.0 Setup.exe is 108 MB vs 226 MB for v0.7.0. It removes the transformers device:'auto' code behind Windows crash #239. Not relevant to BYOK."
+        },
+        {
+            "sha": "c85ff3e",
+            "side": "upstream-only",
+            "date": "2026-07-23",
+            "subject": "uwu",
+            "files": [
+                "src/components/views/MainView.js",
+                "src/storage.js",
+                "src/utils/gemini.js",
+                "src/utils/localai.js",
+                "src/utils/transportLogger.js"
+            ],
+            "whatChanged": "Configurable models in BYOK: geminiLiveModel (default 'gemini-3.1-flash-live-preview'), groqModel and groqImageModel ('qwen/qwen3.6-27b'), stored in config.json. Adds transportLogger.js event logging. gemini.js takes the Live model from getConfig().geminiLiveModel.",
+            "windowsRelevance": "none",
+            "notes": "Platform-neutral. The fork hardcodes GEMINI_LIVE_MODEL='gemini-3.8-live' instead."
+        },
+        {
+            "sha": "23c8a84",
+            "side": "upstream-only",
+            "date": "2026-07-23",
+            "subject": "cleanup",
+            "files": ["src/components/app/CheatingDaddyApp.js", "src/index.html", "src/storage.js"],
+            "whatChanged": "UI cleanup in CheatingDaddyApp: local-AI download progress and drag-bar states, a formatting-only change to the providerMode coercion line, index.html style tweaks, and removal of 3 lines in storage.js.",
+            "windowsRelevance": "none"
+        },
+        {
+            "sha": "998a056",
+            "side": "upstream-only",
+            "date": "2026-06-07",
+            "subject": "Update deprecated Gemini/Gemma model names to current versions (#385)",
+            "files": ["src/storage.js", "src/utils/gemini.js"],
+            "whatChanged": "gemma-3-27b-it → gemma-4-26b-a4b-it (sendToGemma plus usage-limit keys). Live model gemini-2.5-flash-native-audio-preview-09-2025 → gemini-3.1-flash-live-preview.",
+            "windowsRelevance": "low",
+            "notes": "Affects all platforms. The fork's Live model was replaced separately (gemini-3.8-live, which works on Mac). The fork STILL calls the deprecated 'gemma-3-27b-it' at master:src/utils/gemini.js:933 and :954 and storage.js:315/:335 (upstream #339: 404). That code is only reached through dispatchTranscription() when no Groq key is set, in the non-Live fallback."
+        },
+        {
+            "sha": "cdedc66",
+            "side": "upstream-only",
+            "date": "2026-04-27",
+            "subject": "cleanup",
+            "files": [
+                "package-lock.json",
+                "src/components/app/CheatingDaddyApp.js",
+                "src/components/views/FeedbackView.js",
+                "src/components/views/MainView.js",
+                "src/storage.js",
+                "src/utils/window.js",
+                "src/utils/windowResize.js"
+            ],
+            "whatChanged": "Adds providerMode:'byok' to DEFAULT_PREFERENCES. CheatingDaddyApp coerces 'cloud'→'byok' (`prefs.providerMode === 'cloud' ? 'byok' : (prefs.providerMode || 'byok')`). MainView defaults to 'byok' and writes it back. window.js: resizable window 1100x800 with a 700x320 minimum; removes setResizable(false), top-center positioning and live-view resizing; removes the update-sizes IPC and windowResize.js.",
+            "windowsRelevance": "medium",
+            "notes": "The providerMode default matters on any fresh profile, which includes a new Windows install. The fork lacks it: fork CheatingDaddyApp.js:748 and MainView.js:541 still default to 'cloud'."
+        },
+        {
+            "sha": "8c49d85",
+            "side": "fork-only",
+            "date": "2026-10-02",
+            "subject": "feat: analyze screen with gemini-3.8-flash and answer once",
+            "files": ["src/utils/analyzeScreenSend.js", "src/utils/analyzeScreenSend.test.js", "src/utils/gemini.js"],
+            "whatChanged": "Analyze Screen goes through HTTP gemini-3.8-flash (SCREEN_ANALYSIS_MODEL) and answers once.",
+            "windowsRelevance": "none"
+        },
+        {
+            "sha": "9043400",
+            "side": "fork-only",
+            "date": "2026-10-02",
+            "subject": "feat: reliable Gemini 3.8 Live turns, formatted answers and code cards",
+            "files": [
+                "src/components/views/AssistantView.js",
+                "src/utils/answerFormatting.js",
+                "src/utils/gemini.js",
+                "src/utils/geminiLiveSessionConfig.js",
+                "src/utils/liveAudioGapFiller.js",
+                "src/utils/liveTurnWatchdog.js",
+                "(+tests)"
+            ],
+            "whatChanged": "Adds LiveAudioGapFiller, which injects 40 ms noise-floor frames when real audio stops for 300 ms or more, because 'Gemini 3.8 Live only closes a user turn while trailing audio keeps arriving'. Adds LiveTurnWatchdog for typed turns, a CODE_ANSWER_MODEL 'gemini-3.8-flash' code card, and answer formatting.",
+            "windowsRelevance": "high",
+            "notes": "The gap filler is started only in startMacOSAudioCapture (master gemini.js:1544). Windows audio from the renderer's 'send-audio-frame' never starts it. Its comment says digital zeros are avoided on purpose, yet the Windows worklet sends exact zeros during silence. See findings."
+        },
+        {
+            "sha": "0cb8874",
+            "side": "fork-only",
+            "date": "2026-09-16",
+            "subject": "feat: switch BYOK Live to Gemini 3.8 with a faster session config",
+            "files": [
+                "src/utils/analyzeScreenSend.js",
+                "src/utils/gemini.js",
+                "src/utils/geminiLiveSessionConfig.js",
+                "src/utils/geminiLiveTransport.js",
+                "(+tests)"
+            ],
+            "whatChanged": "GEMINI_LIVE_MODEL 'gemini-3.1-flash-live-preview' → 'gemini-3.8-live'. New session config (geminiLiveSessionConfig.js).",
+            "windowsRelevance": "none",
+            "notes": "Tip of origin/windows-compatible-cheatingdaddy."
+        },
+        {
+            "sha": "309fadf",
+            "side": "fork-only",
+            "date": "2026-09-10",
+            "subject": "perf: harden Windows meetings and bound runtime work",
+            "files": [
+                "package.json",
+                "package-lock.json",
+                "src/index.js",
+                "src/utils/window.js",
+                "src/utils/renderer.js",
+                "src/utils/gemini.js",
+                "src/audio-worklet.js",
+                "src/utils/audioPipeline.js",
+                "src/utils/sessionController.js",
+                "src/utils/diagnostics.js",
+                "src/utils/windowBounds.js",
+                "src/utils/historyStore.js",
+                "src/storage.js",
+                "src/components/**",
+                "docs/windows-performance-report.md",
+                "tests/windows-smoke.spec.js",
+                "(44 files)"
+            ],
+            "whatChanged": "Electron ^30.0.5 → 44.3.0 and Forge 7.11.2, both pinned. Adds the node-abi override and the @img/sharp-win32-x64 optional dependency. index.js: CalculateNativeWinOcclusion disabled on win32, Tray (logo.ico on win32), diagnostics JSONL, renderer crash/unresponsive recovery dialog, 10 s renderer-ready fallback show. renderer.js: replaces ScriptProcessor capture with startCapture() → getLoopbackStream (getDisplayMedia) / getMicrophoneStream → AudioWorklet 'meeting-pcm-processor' (src/audio-worklet.js) → ipc 'send-audio-frame' with a 16 kHz (byok/local) or 24 kHz (cloud) AudioContext. Audio failure becomes non-fatal. gemini.js: validateAudioFrame, BoundedAudioQueue (2 s), routeAudioFrame. window.js: windowBounds clamp, display-change handling. SessionController owns the start/stop lifecycle.",
+            "windowsRelevance": "high",
+            "notes": "Rewrites the entire Windows audio path and the Electron runtime. Its own report says Windows remains unverified. tests/windows-smoke.spec.js skips when not on win32. The report says a portable ZIP is produced, but forge.config.js has no maker-zip."
+        },
+        {
+            "sha": "133406a",
+            "side": "fork-only",
+            "date": "2026-09-09",
+            "subject": "fix: resolve Windows renderer startup module",
+            "files": ["src/utils/renderer.js", "src/utils/overlayVisibility.test.js"],
+            "whatChanged": "renderer.js `require('./overlayVisibility')` → `require('./utils/overlayVisibility')`. renderer.js is loaded by index.html, so requires resolve relative to src/.",
+            "windowsRelevance": "high",
+            "notes": "Fixes a renderer startup crash introduced in 79d63b2 that hit every platform. Present in master."
+        },
+        {
+            "sha": "79d63b2",
+            "side": "fork-only",
+            "date": "2026-09-09",
+            "subject": "fix: use an opaque Windows window so the overlay actually paints",
+            "files": ["src/index.html", "src/index.js", "src/utils/overlayVisibility.js", "src/utils/renderer.js", "src/utils/window.js"],
+            "whatChanged": "win32 settings: transparent:false, backgroundColor '#0a0a0a', show:true at creation, background alpha forced to 1, html.windows-opaque CSS class. macOS stays transparent and is shown on ready-to-show or after 2 s.",
+            "windowsRelevance": "high",
+            "notes": "Replaces upstream's transparent:true/#00000000 on Windows. The commit message asserts a Windows paint problem but cites no Windows test."
+        },
+        {
+            "sha": "1a26363",
+            "side": "fork-only",
+            "date": "2026-09-09",
+            "subject": "fix: show the overlay on Windows and use Alt to hide it",
+            "files": [
+                "src/components/app/AppHeader.js",
+                "src/components/app/CheatingDaddyApp.js",
+                "src/components/views/CustomizeView.js",
+                "src/components/views/HelpView.js",
+                "src/index.js",
+                "src/utils/optionTapMonitor.js",
+                "src/utils/overlayVisibility.js",
+                "src/utils/window.js"
+            ],
+            "whatChanged": "Windows: Menu.setApplicationMenu(null), skipTaskbar, roundedCorners off, explicit show()+moveTop(). Default toggleVisibility on win32 becomes 'Alt' (a lone Alt tap detected by uiohook-napi), plus a 'Ctrl+\\\\' globalShortcut fallback. Saved 'Ctrl+\\\\' is migrated to 'Alt'. Hide sets click-through. Restore on win32 uses show()+setAlwaysOnTop('screen-saver')+moveTop().",
+            "windowsRelevance": "high",
+            "notes": "Adds a low-level keyboard hook on Windows. A lone Alt press hides the window, which is also off the taskbar."
+        },
+        {
+            "sha": "17e6740",
+            "side": "fork-only",
+            "date": "2026-09-01",
+            "subject": "feat: stacked answers, Option hide, and working Analyze Screen",
+            "files": [
+                "forge.config.js",
+                "package.json",
+                "src/index.js",
+                "src/utils/optionTapMonitor.js",
+                "src/utils/screenStill.js",
+                "src/utils/renderer.js",
+                "src/utils/gemini.js",
+                "src/utils/window.js",
+                "src/components/**",
+                "src/utils/prompts.js",
+                "openspec/**"
+            ],
+            "whatChanged": "Adds the uiohook-napi dependency and optionTapMonitor. Adds uiohook-napi to forge asar unpack. On darwin: disables the ScreenCaptureKit thumbnail features in index.js. Screenshots move to the main-process desktopCapturer ('capture-screen-still', screenStill.js) on all platforms, and the renderer no longer calls getDisplayMedia on mac. Stacked answers UI.",
+            "windowsRelevance": "medium",
+            "notes": "Windows screenshots now come from desktopCapturer thumbnails, not the getDisplayMedia video, which is good. It also adds a native module to the Windows build."
+        },
+        {
+            "sha": "3ac4076",
+            "side": "fork-only",
+            "date": "2026-08-31",
+            "subject": "feat: use Gemini 3.1 Live for the whole Gemini session",
+            "files": ["package.json", "package-lock.json", "src/utils/gemini.js", "src/utils/renderer.js"],
+            "whatChanged": "@google/genai ^1.2.0 → ^2.19.0. The Live model becomes GEMINI_LIVE_MODEL. Renderer audio chunk 0.1 s → 0.04 s, and the send-audio-content invokes are no longer awaited. Large rewrite of the gemini.js session logic.",
+            "windowsRelevance": "medium",
+            "notes": "Touches the Windows ScriptProcessor send path, which 309fadf later replaced."
+        },
+        {
+            "sha": "c1475ae",
+            "side": "fork-only",
+            "date": "2026-03-04",
+            "subject": "feat: auto-screenshot trigger from voice keyword detection",
+            "files": ["src/utils/gemini.js", "src/utils/renderer.js"],
+            "whatChanged": "Detects visual keywords in transcripts and triggers a screenshot.",
+            "windowsRelevance": "none"
+        },
+        {
+            "sha": "10758a5",
+            "side": "fork-only",
+            "date": "2026-03-04",
+            "subject": "merge: voice transcription BYOK improvements (Groq Whisper + screen context)",
+            "files": ["src/utils/gemini.js", "docs/plans/2026-03-04-screen-context-injection-design.md"],
+            "whatChanged": "Merge of ef98f84/7b7ac18/cfcb77d into cd7c711.",
+            "windowsRelevance": "none"
+        },
+        {
+            "sha": "ef98f84",
+            "side": "fork-only",
+            "date": "2026-03-04",
+            "subject": "feat: inject screen analysis into Groq conversation history",
+            "files": ["src/utils/gemini.js"],
+            "whatChanged": "Screen analysis is added to the Groq history. Live model changes to gemini-2.5-flash-native-audio-preview-12-2025, later superseded.",
+            "windowsRelevance": "none"
+        },
+        {
+            "sha": "7b7ac18",
+            "side": "fork-only",
+            "date": "2026-03-04",
+            "subject": "docs: add screen context injection design doc",
+            "files": ["docs/plans/2026-03-04-screen-context-injection-design.md"],
+            "whatChanged": "Docs only.",
+            "windowsRelevance": "none"
+        },
+        {
+            "sha": "cfcb77d",
+            "side": "fork-only",
+            "date": "2026-03-04",
+            "subject": "fix: resolve slow & incorrect voice-to-text in BYOK mode",
+            "files": ["src/utils/gemini.js"],
+            "whatChanged": "Groq Whisper transcription tuning in BYOK.",
+            "windowsRelevance": "none"
+        },
+        {
+            "sha": "cd7c711",
+            "side": "fork-only",
+            "date": "2026-03-04",
+            "subject": "chore: add .worktrees/ to .gitignore",
+            "files": [".gitignore"],
+            "whatChanged": "gitignore only.",
+            "windowsRelevance": "none"
+        }
+    ],
+    "win32Differences": [
+        {
+            "file": "src/utils/window.js (BrowserWindow options)",
+            "upstreamBehavior": "transparent:true, backgroundColor '#00000000', resizable:true with min 700x320, default 1100x800, alwaysOnTop only when win32; on win32 calls setVisibleOnAllWorkspaces and setAlwaysOnTop('screen-saver',1); setContentProtection(true) on all platforms; setSkipTaskbar on win32.",
+            "forkBehavior": "win32: transparent:false, backgroundColor '#0a0a0a', show:true, skipTaskbar:true, roundedCorners:false, autoHideMenuBar, Menu.setApplicationMenu(null), setResizable(false), top-centered bounds clamped to the work area. setAlwaysOnTop('screen-saver',1), setContentProtection, setSkipTaskbar, then explicit show()+moveTop(). alwaysOnTop:true on every platform.",
+            "evidence": "git diff upstream/master master -- src/utils/window.js: `-        transparent: true,` / `+        transparent: shouldUseTransparentOverlay(process.platform),` (false on win32), `-        backgroundColor: '#00000000',` / `+        backgroundColor: getOverlayBackgroundColor(process.platform),` ('#0a0a0a' on win32); `+    if (isWin) { try { Menu.setApplicationMenu(null) ...`; overlayVisibility.js shouldShowWindowOnCreate('win32') === true.",
+            "impact": "On Windows the fork shows an opaque dark rectangle where upstream shows a transparent overlay. The fork claims upstream's transparent window did not paint on Windows; that is unverified."
+        },
+        {
+            "file": "src/utils/window.js (hide/show shortcut)",
+            "upstreamBehavior": "globalShortcut 'Ctrl+\\\\' toggles hide()/showInactive().",
+            "forkBehavior": "Default toggleVisibility on win32 is 'Alt': a lone Alt tap detected by uiohook-napi (optionTapMonitor.js) through startHideShortcut on did-finish-load, plus a registered 'Ctrl+\\\\' fallback. Saved 'Ctrl+\\\\' is rewritten to 'Alt' in storage. Hide also sets click-through. Restore uses show()+setAlwaysOnTop+moveTop on win32.",
+            "evidence": "overlayVisibility.js: `return platform === 'darwin' ? 'Cmd+\\\\' : 'Alt';`; window.js diff `+    if (process.platform === 'win32' && keybinds.toggleVisibility === 'Alt') { globalShortcut.register('Ctrl+\\\\', ...)`; `+            if (process.platform === 'win32' && savedKeybinds && savedKeybinds.toggleVisibility === 'Ctrl+\\\\') { storage.setKeybinds(keybinds);`",
+            "impact": "Any lone Alt press on Windows hides the overlay (which is off the taskbar and click-through). This adds a native low-level keyboard hook dependency."
+        },
+        {
+            "file": "src/utils/window.js ('view-changed')",
+            "upstreamBehavior": "win32: only setIgnoreMouseEvents(false) when leaving the live view; the window size is left to the user.",
+            "forkBehavior": "All platforms: setWindowFrame to 850x400 top-center for 'assistant' and 1100x800 otherwise.",
+            "evidence": "diff hunk @@ -322 / +491: `+            if (view === 'assistant') { const live = getTopCenteredBounds(850, 400); setWindowFrame(...)`",
+            "impact": "Cosmetic; not a failure cause."
+        },
+        {
+            "file": "src/index.js",
+            "upstreamBehavior": "whenReady: createMainWindow, then IPC handlers. No tray, no diagnostics, no Windows command-line switches.",
+            "forkBehavior": "Windows: app.commandLine.appendSwitch('disable-features','CalculateNativeWinOcclusion'). whenReady order is createMainWindow(); createTray() (logo.ico on win32); startDiagnostics(); then setupGeminiIpcHandlers/Storage/General. Adds did-fail-load, render-process-gone and unresponsive handlers that call forcefullyCrashRenderer and show a dialog, plus a 10 s renderer-ready fallback show().",
+            "evidence": "diff: `+if (process.platform === 'win32') { app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion'); }`, `+    const icon = path.join(__dirname, 'assets', process.platform === 'win32' ? 'logo.ico' : 'logo.png');`; master:src/index.js:113-118 order createMainWindow/createTray/startDiagnostics/setupGeminiIpcHandlers.",
+            "impact": "If tray or diagnostics creation throws, every IPC handler stays unregistered and the UI loads but nothing works. logo.ico is a valid multi-image ICO (header 00 00 01 00, 9 images), so this is low risk."
+        },
+        {
+            "file": "src/utils/renderer.js (non-mac capture)",
+            "upstreamBehavior": "Windows: getDisplayMedia({video, audio}) → ScriptProcessor (4096) at a 24 kHz AudioContext → ipc 'send-audio-content' (base64, 'audio/pcm;rate=24000'). A getDisplayMedia failure throws. Screenshots come from the getDisplayMedia video track.",
+            "forkBehavior": "Windows: getLoopbackStream() = getDisplayMedia(video 1fps + audio). AudioContext sampleRate is 16000 for byok/local or 24000 when providerMode is 'cloud' or unset. The AudioWorklet (src/audio-worklet.js) posts 40 ms Int16 frames → ipc 'send-audio-frame'. Audio failure is non-fatal ('Audio unavailable — text and Analyze Screen still work'). Screenshots come from main-process desktopCapturer ('capture-screen-still'). Mac never takes this path for system audio (renderer.js:703-717).",
+            "evidence": "master:src/utils/renderer.js:633-644 getLoopbackStream; 650-689 setupSharedAudioWorklet → `ipcRenderer.invoke('send-audio-frame', {... sampleRate, pcm: frame.pcm})`; 698 `const sampleRate = providerMode === 'cloud' ? 24000 : 16000;`; 709 `if (!isMacOS && audioMode !== 'mic_only') { mediaStream = await getLoopbackStream(sampleRate);`. Upstream: up renderer.js:315-334 getDisplayMedia + setupWindowsLoopbackProcessing (ScriptProcessor → 'send-audio-content').",
+            "impact": "The whole Windows audio pipeline is new fork code. It is never exercised on the user's Mac, where preferences.json has audioMode 'speaker_only' and SystemAudioDump is used."
+        },
+        {
+            "file": "src/utils/gemini.js (audio IPC)",
+            "upstreamBehavior": "'send-audio-content' (byok) → geminiSessionRef.current.sendRealtimeInput({audio:{data, mimeType 'audio/pcm;rate=24000'}}) directly.",
+            "forkBehavior": "'send-audio-frame' → validateAudioFrame → routeAudioFrame → enqueueLivePcm (resampled to 16 kHz when 24k) → BoundedAudioQueue (2 s) → drainGeminiQueue sends 'audio/pcm;rate=16000'. LiveAudioGapFiller (noise floor to close Gemini 3.8 Live turns) runs only inside startMacOSAudioCapture.",
+            "evidence": "master:src/utils/gemini.js:1882-1890 send-audio-frame; 1819-1835 routeAudioFrame; 1079-1086 enqueueLivePcm; 220-224 liveGapFiller onFill; liveGapFiller.start() appears only at 1544 (inside startMacOSAudioCapture, which returns false unless darwin at 1510). upstream gemini.js:1123-1128 direct sendRealtimeInput.",
+            "impact": "On Windows, silence after speech is sent as exact zeros from the worklet and never as the filler's noise floor. If Gemini 3.8 Live really needs non-zero trailing audio (as the fork's own comment says), Windows turns may never complete."
+        },
+        {
+            "file": "src/components/app/CheatingDaddyApp.js, src/components/views/MainView.js, src/storage.js",
+            "upstreamBehavior": "DEFAULT_PREFERENCES.providerMode = 'byok'; start converts 'cloud' to 'byok'; MainView defaults to 'byok' and persists it.",
+            "forkBehavior": "DEFAULT_PREFERENCES has no providerMode; handleStart uses `prefs.providerMode || 'cloud'`; MainView `this._mode = prefs.providerMode || 'cloud'`; renderer startCapture `preferences.providerMode || 'cloud'`. Cloud needs creds.cloudToken and connects to wss://api.cheatingdaddy.com.",
+            "evidence": "master CheatingDaddyApp.js:748, :722-727 ('Cloud token is required'); MainView.js:541; storage.js:20-27 (no providerMode); cloud.js:42. upstream storage.js:25, CheatingDaddyApp.js:600, MainView.js:758-762. Mac preferences.json (~/Library/Application Support/cheating-daddy-config) has providerMode 'byok'.",
+            "impact": "Platform-neutral code, but it hits every fresh install. A new Windows machine (%APPDATA%\\\\cheating-daddy-config) starts in Cloud mode."
+        },
+        {
+            "file": "src/utils/localai.js",
+            "upstreamBehavior": "llama.cpp/whisper.cpp native runtime (800df4d), which downloads Windows server binaries.",
+            "forkBehavior": "Ollama + @huggingface/transformers Whisper with `device: 'auto'`.",
+            "evidence": "master:src/utils/localai.js:182-184 `pipeline('automatic-speech-recognition', modelName, { dtype: 'q8', device: 'auto',`; upstream issue https://github.com/sohzm/cheating-daddy/issues/239",
+            "impact": "Local mode crashes on some Windows GPU setups (#239). BYOK is not affected."
+        },
+        {
+            "file": "package.json / package-lock.json",
+            "upstreamBehavior": "electron ^30.0.5 (lock 30.5.1), @google/genai ^1.2.0, forge ^7.8.1. No uiohook, transformers or ollama after 800df4d.",
+            "forkBehavior": "electron 44.3.0 pinned, @google/genai ^2.19.0, forge 7.11.2. Adds uiohook-napi ^1.5.5 (win32-x64 prebuild present), keeps @huggingface/transformers ^3.8.1 (onnxruntime-node, sharp) and ollama ^0.6.3. optionalDependencies @img/sharp-win32-x64. overrides node-abi 3.96.0.",
+            "evidence": "git diff upstream/master master -- package.json (hunk @@ -23,22 +28,34 @@); upstream lock :2529-2530 electron 30.5.1; fork lock :4143-4144 electron 44.3.0; node_modules/uiohook-napi/prebuilds contains win32-x64.",
+            "impact": "Different Chromium (audio/capture behavior) on Windows. More native packages with install scripts on Windows: uiohook-napi, sharp, onnxruntime-node. A larger installer."
+        },
+        {
+            "file": "forge.config.js",
+            "upstreamBehavior": "asar: true.",
+            "forkBehavior": "asar.unpack '**/{onnxruntime-node,onnxruntime-common,@huggingface/transformers,sharp,@img,uiohook-napi}/**'. Makers: squirrel, dmg, appimage only (no maker-zip), although docs/windows-performance-report.md claims a ZIP.",
+            "evidence": "git diff upstream/master master -- forge.config.js; master forge.config.js makers list",
+            "impact": "Windows packaging unpacks the native modules correctly. Only Setup.exe is produced by `npm run make`."
+        }
+    ],
+    "releases": "Upstream releases (gh release list/view -R sohzm/cheating-daddy):\n- v0.8.0: Latest, published 2026-07-23. Tag → 3cccc36 (upstream/master HEAD). Assets: Cheating.Daddy-0.8.0-arm64.dmg (96.7 MB, 2653 downloads), Cheating.Daddy-0.8.0.Setup.exe (108.6 MB, 8495 downloads). Notes: llama.cpp/whisper.cpp local AI, 66% smaller app, model customization in BYOK.\n- v0.7.0: 2026-02-09. Tag → 5dfdc12, the fork's merge-base. Assets: arm64.dmg (296 MB), Setup.exe (225.9 MB, 24419 downloads), llama-server/whisper-server binaries for macOS arm64/x86_64 and windows-x86_64.exe.\n- v0.6.0: 2026-02-09. Tag → 1e42aa3. arm64.dmg plus Setup.exe.\n- 0.5.0: 2025-12-12. Tag → 9405d16. arm64.dmg plus Setup.exe (14667 downloads).\n- Older: v0.4/v0.3/v0.2/latest (0.1 pre-release).\nEvery 0.5.0+ release ships a Windows Squirrel Setup.exe. No macOS x64 dmg and no Windows zip.\nThe fork (RohitRathiii/cheatingdaddymodified) has no GitHub releases and no CI (.github absent on both sides). Windows users of the fork must build from source: npm install, then npm start or `npm run make` on Windows. The fork's report says Setup.exe was never produced: 'Electron Forge could not produce the Squirrel setup executable on this Mac'.",
+    "findings": [
+        {
+            "title": "Fresh Windows profile defaults to 'cloud' provider; BYOK session never starts unless the user switches tabs",
+            "stage": "session-start",
+            "severity": "major",
+            "confidence": "likely",
+            "evidence": [
+                "master:src/components/app/CheatingDaddyApp.js:748 `const providerMode = prefs.providerMode || 'cloud';` and :722-727 throw 'Cloud token is required' / 'Cloud connection failed'",
+                "master:src/components/views/MainView.js:541 `this._mode = prefs.providerMode || 'cloud';`",
+                "master:src/storage.js:20-27 DEFAULT_PREFERENCES has no providerMode; storage dir on win32 is %USERPROFILE%\\AppData\\Roaming\\cheating-daddy-config (storage.js:48-49)",
+                "master:src/utils/cloud.js:42 `wss://api.cheatingdaddy.com/ws?token=...`",
+                "upstream cdedc66: storage.js `+    providerMode: 'byok',`, CheatingDaddyApp `prefs.providerMode === 'cloud' ? 'byok' : (prefs.providerMode || 'byok')`, MainView `prefs.providerMode || 'byok'`",
+                "Mac: ~/Library/Application Support/cheating-daddy-config/preferences.json → providerMode 'byok' (already persisted, so the Mac never hits the default)"
+            ],
+            "explanation": "On Mac the user's preferences.json already contains providerMode:'byok', so Start goes to initializeGemini. A new Windows machine has an empty config directory. MainView opens in Cloud mode, and handleStart picks 'cloud', which needs a cheatingdaddy.com cloud token (a service upstream stopped using in April 2026) and never touches the Gemini key. The result is 'Cloud token is required' or 'Cloud connection failed', with no Live session and no answers. Entering a Gemini key alone is not enough; the BYOK tab must be clicked so _saveMode persists 'byok'. Separately, the renderer picks the AudioContext rate from the same default (renderer.js:697-698).",
+            "fix": "Port cdedc66's provider default: add providerMode:'byok' to DEFAULT_PREFERENCES, and default to or convert to 'byok' in CheatingDaddyApp.handleStart, MainView._loadFromStorage and renderer.startCapture. Immediate workaround on Windows: select the BYOK/Gemini tab once before Start, or write \"providerMode\":\"byok\" into %APPDATA%\\cheating-daddy-config\\preferences.json.",
+            "presentInFork": "no"
+        },
+        {
+            "title": "Windows audio uses an unexercised renderer path, and the Gemini 3.8 Live gap filler is macOS-only",
+            "stage": "answers-display",
+            "severity": "major",
+            "confidence": "possible",
+            "evidence": [
+                "master:src/utils/liveAudioGapFiller.js:1-3 'Gemini 3.8 Live only closes a user turn while trailing audio keeps arriving ... (digital zeros are avoided on purpose)'",
+                "master:src/utils/gemini.js:220-224 liveGapFiller onFill → enqueueLivePcm; the only liveGapFiller.start() is at :1544 inside startMacOSAudioCapture, which returns false on non-darwin (:1510)",
+                "master:src/utils/gemini.js:1882-1890 'send-audio-frame' → routeAudioFrame (:1819-1835) → enqueueLivePcm (:1079-1086); no gap filler start",
+                "master:src/utils/renderer.js:650-689 the AudioWorklet posts a frame every 40 ms of graph time; src/audio-worklet.js:10-26 emits PCM whenever inputs exist (exact zeros when the source is silent)",
+                "master:src/utils/renderer.js:703-717: Mac uses 'start-macos-audio' (SystemAudioDump); only non-Mac calls getLoopbackStream()",
+                "Mac preferences.json audioMode 'speaker_only', so the worklet path has never run for this user",
+                "master:src/utils/liveTurnWatchdog.js and gemini.js:588: the watchdog only covers typed turns (dispatchLiveTypedTurn)"
+            ],
+            "explanation": "On macOS, system audio comes from SystemAudioDump in the main process, and the fork starts LiveAudioGapFiller there. The filler exists because Gemini 3.8 Live would otherwise keep a spoken turn open. On Windows, audio comes from getDisplayMedia loopback → AudioWorklet → 'send-audio-frame', and the filler is never started. During silence, the Web Audio graph keeps feeding the worklet zero samples, so Windows sends exact digital zeros: the case the fork's comment says it avoids on purpose [INFERENCE that Chromium's MediaStreamAudioSourceNode outputs zeros on underrun]. If Gemini 3.8 Live does not end the turn on pure zeros, input transcription shows but answers never arrive. That matches upstream's 'stuck on listening' reports on Windows (#168). Nothing in the repo shows this path ever running on Windows.",
+            "fix": "Start liveGapFiller whenever Live audio arrives from the renderer, not only in startMacOSAudioCapture. For example, call liveGapFiller.start() in the 'initialize-gemini' success path or on the first 'send-audio-frame' while currentProviderMode==='byok', and stop it in close-session. Alternatively, replace all-zero worklet frames with createNoiseFrame(). Then check on Windows with the diagnostics log (global.getMeetingDiagnostics → gapsFilled, audioQueueFrames).",
+            "presentInFork": "no"
+        },
+        {
+            "title": "Fork's Windows changes (Electron 44 upgrade, opaque window, Alt hook, worklet audio) were never run on Windows",
+            "stage": "other",
+            "severity": "major",
+            "confidence": "confirmed",
+            "evidence": [
+                "master:docs/windows-performance-report.md: 'Windows visibility and two-hour readiness remain unverified until the packaged app passes the planned 150-minute Windows 11 test.'",
+                "same file: 'Electron Forge could not produce the Squirrel setup executable on this Mac' and 'Verification: Unit coverage plus macOS Electron renderer smoke; Windows smoke is ready for a Windows host'",
+                "master:tests/windows-smoke.spec.js: `test.skip(process.platform !== 'win32', ...)`",
+                "commits 1a26363/79d63b2/133406a/309fadf authored on host consultadds-MacBook-Pro-67.local",
+                "133406a fixes a renderer require path broken by 79d63b2, which shows these commits shipped without being run"
+            ],
+            "explanation": "Every Windows-specific change listed in win32Differences was written and 'verified' on macOS only. The Electron jump from 30.5.1 (what upstream's Windows Setup.exe ships) to 44.3.0 changes the Chromium capture and audio stack on Windows. So any Windows-only regression in window creation, the uiohook hook, the loopback/worklet path or packaging would be invisible on the Mac.",
+            "fix": "Run `npm start` on a Windows box from a terminal and capture main-process stdout, which includes the Registered.../SystemAudio/Live logs, plus DevTools console output and %APPDATA%\\cheating-daddy\\logs\\diagnostics\\performance.jsonl. If the shell or window is the failure, bisect by checking out origin/windows-compatible-cheatingdaddy (0cb8874) vs 5dfdc12 (upstream v0.7.0, Electron 30).",
+            "presentInFork": "n/a"
+        },
+        {
+            "title": "getDisplayMedia handler has no error path; a failed or empty getSources leaves the session stuck in 'starting' on Windows",
+            "stage": "session-start",
+            "severity": "major",
+            "confidence": "possible",
+            "evidence": [
+                "master:src/utils/window.js:148-155 `desktopCapturer.getSources({ types: ['screen'] }).then(sources => { callback({ video: sources[0], audio: 'loopback' }); });` with no .catch and no empty-sources check",
+                "identical upstream: upstream/master:src/utils/window.js:35-43",
+                "master:src/utils/renderer.js:709-711: only non-Mac awaits getLoopbackStream() → getDisplayMedia; Mac skips it (17e6740)",
+                "master:src/utils/sessionController.js:43: start awaits startCapture before setState('active')",
+                "Electron issue on unhandled rejections in this handler: https://github.com/electron/electron/issues/45517"
+            ],
+            "explanation": "If getSources rejects, or sources[0] is undefined (for example a remote or locked session, or a capture policy), the callback is never called or gets invalid input. getDisplayMedia then never settles, so startCapture and SessionController.start never resolve, and the UI never switches to the assistant view. This code exists upstream too, but the fork's Mac flow never calls getDisplayMedia, so only Windows (and Linux) can hit it.",
+            "fix": "Add .catch(() => callback({})) and `if (!sources.length) return callback({})`. Wrap getLoopbackStream in a timeout (Promise.race, about 5 s) so a missing loopback degrades to 'Audio unavailable' instead of hanging.",
+            "presentInFork": "n/a"
+        },
+        {
+            "title": "Local AI mode on Windows still uses transformers.js device:'auto' (upstream crash #239); upstream replaced this stack",
+            "stage": "session-start",
+            "severity": "major",
+            "confidence": "likely",
+            "evidence": [
+                "master:src/utils/localai.js:182-184 `pipeline('automatic-speech-recognition', modelName, { dtype: 'q8', device: 'auto',`",
+                "https://github.com/sohzm/cheating-daddy/issues/239 'App crashes on session start in local mode on Windows (dual GPU) — invalid device + corrupted ONNX cache'",
+                "upstream 800df4d replaces localai.js with native-ai-runtime.js (llama.cpp/whisper.cpp) and removes @huggingface/transformers/ollama"
+            ],
+            "explanation": "Only relevant if the user tries Local mode on Windows. The Node ONNX backend accepts only 'dml'/'cpu', so 'auto' can crash the app on start. macOS uses a different backend. The user's working Mac setup is BYOK, so this probably isn't the cause of their failure.",
+            "fix": "Use device: process.platform === 'win32' ? 'cpu' : 'auto' (or try 'dml' and fall back to 'cpu'), or port upstream 800df4d's native runtime.",
+            "presentInFork": "no"
+        },
+        {
+            "title": "Alt-tap hide on Windows hides the overlay on any lone Alt press, and the hidden window is off the taskbar and click-through",
+            "stage": "shortcuts",
+            "severity": "minor",
+            "confidence": "possible",
+            "evidence": [
+                "master:src/utils/overlayVisibility.js getDefaultToggleVisibility: `platform === 'darwin' ? 'Cmd+\\\\' : 'Alt'`; mergeKeybinds rewrites saved 'Ctrl+\\\\' to 'Alt' on win32",
+                "master:src/utils/window.js hideOverlayWindow → setClickThrough(true) + hide(); skipTaskbar: isWin",
+                "master:src/utils/optionTapMonitor.js: uIOhook keydown/keyup, toggles on Alt release unless another key or mouse was pressed"
+            ],
+            "explanation": "On Windows, Alt alone is pressed often (menu activation, accidental taps). Each lone tap toggles the overlay. Once hidden, it does not appear on the taskbar; it comes back only with another Alt tap, Ctrl+\\\\ or the tray 'Show'. That can look like 'the app doesn't work or disappeared'. macOS uses Cmd+\\\\ by default, so the Mac is unaffected.",
+            "fix": "Keep 'Ctrl+\\\\' as the Windows default and make Alt-tap opt-in, or require a double-tap.",
+            "presentInFork": "n/a"
+        },
+        {
+            "title": "Fork still calls deprecated 'gemma-3-27b-it' (renamed upstream in 998a056)",
+            "stage": "answers-display",
+            "severity": "minor",
+            "confidence": "confirmed",
+            "evidence": [
+                "master:src/utils/gemini.js:933 `model: 'gemma-3-27b-it',` and :954 incrementCharUsage(..., 'gemma-3-27b-it', ...)",
+                "master:src/storage.js:315, :335 'gemma-3-27b-it'",
+                "upstream 998a056: `-            model: 'gemma-3-27b-it',` / `+            model: 'gemma-4-26b-a4b-it',`",
+                "https://github.com/sohzm/cheating-daddy/issues/339 (404 on gemma-3-27b-it)"
+            ],
+            "explanation": "This fails on every platform, but only in the dispatchTranscription() fallback (gemini.js:978-987), which runs when there is no Live session and no Groq key. The Live models the fork uses (gemini-3.8-live, gemini-3.8-flash, gemini-3.1-flash-lite) work on Mac, so this does not explain a Windows-only failure.",
+            "fix": "Rename to 'gemma-4-26b-a4b-it' as in 998a056, in both gemini.js and storage.js.",
+            "presentInFork": "no"
+        },
+        {
+            "title": "Startup registers IPC handlers after tray and diagnostics; any Windows-only throw there leaves a UI without handlers",
+            "stage": "launch",
+            "severity": "minor",
+            "confidence": "possible",
+            "evidence": [
+                "master:src/index.js:113-118 `createMainWindow(); createTray(); stopDiagnostics = startDiagnostics(...); setupGeminiIpcHandlers(geminiSessionRef); setupStorageIpcHandlers(); setupGeneralIpcHandlers();` inside an async whenReady callback with no try/catch",
+                "master:src/index.js createTray uses logo.ico on win32; git cat-file shows a valid ICO (00 00 01 00, 9 images, 180,723 bytes)"
+            ],
+            "explanation": "If new Tray() or startDiagnostics() throws on a particular Windows machine, the async whenReady promise rejects quietly. No IPC handlers get registered, so the window loads but storage, Start and every action fail. Upstream registers handlers without the tray or diagnostics steps. Low likelihood because the icon is valid.",
+            "fix": "Register the IPC handlers before createTray/startDiagnostics and wrap those two calls in try/catch.",
+            "presentInFork": "n/a"
+        },
+        {
+            "title": "Install: lockfile resolves @electron/node-gyp via git+ssh (same as upstream)",
+            "stage": "install",
+            "severity": "minor",
+            "confidence": "possible",
+            "evidence": [
+                "master:package-lock.json:693-695 `\"resolved\": \"git+ssh://git@github.com/electron/node-gyp.git#06b29aa...\"`",
+                "upstream/master:package-lock.json:662-664 and 5dfdc12:package-lock.json:664-666 identical",
+                "https://github.com/sohzm/cheating-daddy/issues/383 (Electron install issue; a comment says Windows is still affected)"
+            ],
+            "explanation": "A Windows machine without git, or without GitHub SSH access, may fail `npm install` on this dependency. The Mac already has node_modules. This is not a fork regression.",
+            "fix": "Install Git for Windows. If SSH fails, run `git config --global url.\"https://github.com/\".insteadOf ssh://git@github.com/`, or regenerate the lock with an https resolution.",
+            "presentInFork": "n/a"
+        },
+        {
+            "title": "Fork still ships transformers/onnxruntime/sharp/ollama native stack on Windows (upstream removed it in 800df4d)",
+            "stage": "packaging",
+            "severity": "minor",
+            "confidence": "confirmed",
+            "evidence": [
+                "master package.json deps: @huggingface/transformers ^3.8.1, ollama ^0.6.3, uiohook-napi ^1.5.5, optionalDependencies @img/sharp-win32-x64; forge asar.unpack includes onnxruntime-node, sharp, @img, uiohook-napi",
+                "upstream 800df4d removes transformers/ollama and sets asar:true; release sizes: v0.7.0 Setup.exe 225.9 MB vs v0.8.0 108.6 MB",
+                "docs/windows-performance-report.md claims a portable ZIP under out/make/zip/win32/x64, but forge.config.js has no @electron-forge/maker-zip"
+            ],
+            "explanation": "This means more native install scripts on Windows (npm 11 already warns: uiohook-napi, sharp, onnxruntime-node, electron-winstaller, protobufjs, @google/genai) and a larger installer. It only becomes a failure if a native install step breaks on the Windows box. The documented ZIP artifact is not produced.",
+            "fix": "Remove the unused local-AI deps, or port 800df4d. Add maker-zip if a portable build is wanted.",
+            "presentInFork": "no"
+        }
+    ],
+    "openQuestions": [
+        "What is the exact Windows symptom: install error, no window, blank or opaque window, 'Cloud token is required', stuck 'Listening', or audio unavailable? Main-process stdout from `npm start` run in a Windows terminal decides between the findings above.",
+        "Was the Windows run from master (8c49d85), origin/windows-compatible-cheatingdaddy (0cb8874), or an upstream Setup.exe? Upstream Setup.exe v0.8.0 uses Electron 30 and none of the fork code.",
+        "Does Gemini 3.8 Live end user turns on digital-zero audio? This is needed to confirm the gap-filler finding; it cannot be tested without a Windows run, or by sending zero frames from the Mac via the mic_only worklet path.",
+        "Does Chromium in Electron 44 on Windows deliver loopback audio for getDisplayMedia with the 'loopback' handler? Electron #49607 (silent loopback since 39) is macOS-only (CATAP), so no Windows regression is documented, but the fork is the first code here to use Electron 44 on Windows."
+    ]
+}

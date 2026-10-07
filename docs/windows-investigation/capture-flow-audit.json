@@ -1,0 +1,203 @@
+{
+    "summary": "I traced the meeting flow on fork master 8c49d85 from Start to an answer on screen. On Windows every system-audio hop is implemented, and the audio contract between renderer and main is consistent. I ran the fork's code verbatim on Electron 44.3.0 (macOS), with the display-media handler forced to run as it does on Windows. That chain works: a real 48 kHz stereo 'loopback' track goes through AudioContext(16k/24k), the AudioWorklet and ipcRenderer.invoke('send-audio-frame') into main, and validateAudioFrame accepted 144/144 frames (1280 B at 16 kHz BYOK, 1920 B at 24 kHz cloud). The payload arrives in main as an ArrayBuffer, and the worklet also loads from an asar. Nothing gates audio to darwin: routeAudioFrame and enqueueLivePcm handle every platform, and the session exists before capture starts.\n\nOn the Mac the user's default speaker_only setup never touches this renderer path, because SystemAudioDump feeds main directly. So the Mac success does not test the Windows chain.\n\nThe real Windows-only risks sit around the chain, not in its contract:\n(1) The display-media handler has no error handling. If desktopCapturer.getSources rejects, getDisplayMedia hangs forever. startCapture has no timeout, so the meeting sticks in 'starting' and never switches to the assistant view. Every later getDisplayMedia request also hangs until the app restarts (reproduced).\n(2) Chromium's Windows 'loopback' records only the default playback device (eRender/eConsole). If Zoom/Teams or a Bluetooth hands-free headset plays on another device, Gemini hears silence. SystemAudioDump on the Mac has no such dependency.\n(3) The liveGapFiller that 9043400 added so Gemini 3.8 turns close is started only in startMacOSAudioCapture. The same commit removed the cross-platform audioStreamEnd energy logic. During silence, Windows sends digital-zero frames, which the fork's own comment says it avoids on purpose. Voice turns with no output have no watchdog.\n(4) If getDisplayMedia rejects, the meeting still starts with only a status-bar note, so it looks like it works but never answers.\n\nI found no platform branch in the Gemini Live config, initializeGeminiSession, the Analyze Screen path, the answer rendering (AssistantView/CheatingDaddyApp) or the renderer-ready handshake. Screen stills use desktopCapturer thumbnails on both OSes; the only darwin-only logic is the permission check. Electron 44 does not require transient user activation for getDisplayMedia (tested), and useSystemPicker is ignored on Windows (macOS 15+ only), so the handler runs there.\n\nCommit history: renderer.js, audio-worklet.js and audioPipeline.js last changed in 309fadf, which changed both sides of send-audio-frame together. Later commits 0cb8874, 9043400 and 8c49d85 touched only main-side turn logic and Analyze Screen; they did not change the IPC contract. 9043400 did make turn closing mac-only.",
+    "hops": [
+        {
+            "hop": "1. Start click -> SessionController -> provider init",
+            "mac": "MainView._handleStart -> CheatingDaddyApp.handleStart reads prefs.providerMode||'cloud' -> SessionController.start -> _startProvider -> ipc 'initialize-gemini' -> Live WS connect (gemini-3.8-live)",
+            "windows": "Identical code; no platform branch. A fresh Windows profile defaults providerMode to 'cloud' (storage.js defaults have no providerMode), so BYOK must be selected again on that machine",
+            "status": "ok",
+            "evidence": "CheatingDaddyApp.js:746-749,721-735; sessionController.js:36-49 (provider first, then capture); gemini.js:1861-1871,1263-1393; MainView.js:541; storage.js:26-34 (no providerMode key)"
+        },
+        {
+            "hop": "2. Gemini Live session config/transport",
+            "mac": "buildGeminiLiveSessionConfig: AUDIO modality, server VAD END_SENSITIVITY_LOW, silenceDurationMs 800/1200; ws transport in main",
+            "windows": "Same; no process.platform in geminiLiveSessionConfig.js, geminiLiveTransport.js or initializeGeminiSession",
+            "status": "ok",
+            "evidence": "geminiLiveSessionConfig.js:22-61; geminiLiveTransport.js:1-42; gemini.js:1263-1402 (grep: no darwin/win32 in this range)"
+        },
+        {
+            "hop": "3. System audio source",
+            "mac": "renderer startCapture: isMacOS -> invoke 'start-macos-audio' -> spawn SystemAudioDump (24 kHz stereo s16le on stdout) + liveGapFiller.start()",
+            "windows": "renderer startCapture: !isMacOS -> getLoopbackStream(sampleRate) = getDisplayMedia({video:{frameRate:1,...}, audio:{sampleRate,channelCount:1,EC/NS/AGC false}}) -> main handler desktopCapturer.getSources({types:['screen']}).then(s => callback({video:s[0], audio:'loopback'})) with {useSystemPicker:true} (macOS 15+ only, so ignored on Windows). The track arrives as 48 kHz stereo deviceId 'loopback'; the sampleRate/channelCount constraints are not applied. Chromium's Windows loopback records only the default eConsole render endpoint. The handler has no .catch, so any getSources failure hangs getDisplayMedia",
+            "status": "suspect",
+            "evidence": "renderer.js:703-717,633-644; window.js:148-156; gemini.js:1509-1544,2110-2125; electron.d.ts:13400-13404 (useSystemPicker macOS 15+ only), 23872-23877 ('loopback' Windows); harness /tmp/cdwin-RendererCaptureFlow/e2e: fork handler with useSystemPicker:false -> video=1 audio=1 {deviceId:'loopback',sampleRate:48000,channelCount:2}; Chromium media/audio/win/audio_low_latency_input_win.cc GetDefaultAudioEndpoint(eRender, eConsole) for loopback"
+        },
+        {
+            "hop": "4. PCM shaping (rate/channels/chunk)",
+            "mac": "main: 40 ms chunks of 24k stereo (3840 B) -> convertStereoToMono -> 1920 B mono 24 kHz",
+            "windows": "renderer: AudioContext({sampleRate: providerMode==='cloud'?24000:16000}) resamples the 48k track; ChannelMerger -> AudioWorklet 'meeting-pcm-processor' averages channels, emits 40 ms Int16 frames: 640 samples/1280 B (BYOK, local) or 960 samples/1920 B (cloud). During silence the frames are exact zeros",
+            "status": "ok",
+            "evidence": "gemini.js:1546-1561,1602-1614; renderer.js:650-689,697-698; audio-worklet.js:1-31; harness: 107/107 frames, sizes [1280,1920]; silent run 36/36 all-zero frames; worklet also loads from asar (/tmp/cdwin-RendererCaptureFlow/app.asar run)"
+        },
+        {
+            "hop": "5. Renderer -> main IPC",
+            "mac": "Not used for system audio (main-process capture); used only for mic in mic_only/both",
+            "windows": "ipcRenderer.invoke('send-audio-frame', {generation, source:'single'|'mixed', sequence, capturedAt, sampleRate, pcm: ArrayBuffer}); max 50 in flight -> ipcMain.handle('send-audio-frame') -> validateAudioFrame (rate 16000|24000, source enum, 0<len<=64KiB, even) -> routeAudioFrame",
+            "status": "ok",
+            "evidence": "renderer.js:672-687; gemini.js:1882-1890; audioPipeline.js:85-94; harness e2e (fork getLoopbackStream + setupSharedAudioWorklet extracted verbatim from renderer.js): frames 144, accepted 144, rejected [], payload type [object ArrayBuffer], nonZero 104 while afplay ran"
+        },
+        {
+            "hop": "6. Routing into Gemini (darwin gate?)",
+            "mac": "startMacOSAudioCapture stdout handler -> enqueueLivePcm(mono, 24000) when geminiSessionRef.current",
+            "windows": "routeAudioFrame: byok + session -> enqueueLivePcm(pcm, 16000); cloud -> sendCloudAudio (24k); local -> processLocalAudio(pcm, 16000). No darwin check; the session ref is set before startCapture runs",
+            "status": "ok",
+            "evidence": "gemini.js:1563-1571,1819-1836,1866-1868; sessionController.js:38-43; localai.js:380-383"
+        },
+        {
+            "hop": "7. Resample/queue/send to Live",
+            "mac": "enqueueLivePcm: 24k->16k linear resample -> BoundedAudioQueue(2 s) -> drainGeminiQueue -> sendRealtimeInput({audio:{mimeType:'audio/pcm;rate=16000'}})",
+            "windows": "Same function; 16 kHz passes through without resampling",
+            "status": "ok",
+            "evidence": "gemini.js:1055-1087,1632-1678; audioPipeline.js:3-43"
+        },
+        {
+            "hop": "8. Turn closing in silence (gap filler)",
+            "mac": "SystemAudioDump stops emitting in silence; liveGapFiller (started in startMacOSAudioCapture) injects noise floor amplitude 8 every 40 ms after a 300 ms gap so 3.8 closes turns",
+            "windows": "liveGapFiller.start() is never called. The AudioWorklet keeps sending frames, but they are digital zeros, which the gap filler comment says are avoided on purpose. 9043400 removed the old cross-platform audioStreamEnd/RMS logic. LiveTurnWatchdog arms only after output or a typed turn, so a voice turn that never closes leaves the UI on 'Listening'",
+            "status": "suspect",
+            "evidence": "liveAudioGapFiller.js:1-3,64-68; gemini.js:220-224,1080,1544,1622; git show 9043400 -- src/utils/gemini.js (removed observeLiveAudioEnergy/audioStreamEnd, added liveGapFiller.start only in startMacOSAudioCapture); liveTurnWatchdog.js:24-41; harness silent run zeroFrames 36/36"
+        },
+        {
+            "hop": "9. Microphone (mic_only/both)",
+            "mac": "getUserMedia(audio EC/NS/AGC, sampleRate) -> same AudioWorklet -> send-audio-frame",
+            "windows": "Same code path and channel; mic_only skips getDisplayMedia; both -> 2-input merger, source 'mixed', and the worklet averages (each input at half amplitude)",
+            "status": "ok",
+            "evidence": "renderer.js:620-631,709,719-731,679; audio-worklet.js:13-16"
+        },
+        {
+            "hop": "10. Screen still / Analyze Screen",
+            "mac": "invoke 'capture-screen-still' -> desktopCapturer.getSources({types:['screen'], thumbnailSize}) -> thumbnail.toJPEG; darwin-only permission check -> send-image-content -> chooseAnalyzeScreenPath (byok+key -> http gemini-3.8-flash, then context to Live)",
+            "windows": "Same; only the darwin permission check is skipped. Overlay excluded via setContentProtection(true) on win32. The legacy getDisplayMedia-video screenshot path (ensureScreenshotVideo) is unused",
+            "status": "ok",
+            "evidence": "renderer.js:490-544; gemini.js:1959-2048; screenStill.js:60-118 (platform==='darwin' only at 65,101); window.js:170-172; analyzeScreenSend.js:1-8"
+        },
+        {
+            "hop": "11. Answer delivery and render",
+            "mac": "emitAnswer -> sendToRenderer(getAllWindows()[0], 'answer-event') -> CheatingDaddyApp.handleAnswerEvent -> responses -> AssistantView",
+            "windows": "Same; no platform branch in CheatingDaddyApp/AssistantView answer code; one BrowserWindow only. renderer-ready only drives a 10 s show fallback",
+            "status": "ok",
+            "evidence": "gemini.js:68-80,317-322; CheatingDaddyApp.js:481-482,610-657; index.js:94-99,353-355; renderer.js:1157-1161; grep: no isWindows/isMacOS in AssistantView.js"
+        },
+        {
+            "hop": "12. Stop",
+            "mac": "stopCapture -> 'stop-macos-audio'; close-session -> stopMacOSAudioCapture (kills SystemAudioDump, stops gap filler, clears queue)",
+            "windows": "stopCapture stops tracks/AudioContext; close-session still calls stopMacOSAudioCapture, which clears the queue on every platform",
+            "status": "ok",
+            "evidence": "renderer.js:746-783; gemini.js:1616-1630,2137-2139"
+        }
+    ],
+    "findings": [
+        {
+            "title": "Display-media handler never answers on getSources failure: getDisplayMedia hangs, meeting start never completes, and later starts hang too",
+            "stage": "session-start",
+            "severity": "blocker",
+            "confidence": "possible",
+            "evidence": [
+                "src/utils/window.js:149-156 @8c49d85: desktopCapturer.getSources(...).then(sources => callback({ video: sources[0], audio: 'loopback' })) with no .catch and no sources.length check",
+                "src/utils/renderer.js:711 awaits getLoopbackStream() with no timeout; sessionController.js:43 awaits startCapture; CheatingDaddyApp.js:749-764 only switches to the assistant view after start resolves",
+                "Harness /tmp/cdwin-RendererCaptureFlow/gdm2 on Electron 44.3.0 (useSystemPicker:false so the handler runs, as on Windows): handler that never calls back -> 'still pending after 5s (hung)'; handler whose promise rejects -> '[main] unhandledRejection getSources failed' + hung; the NEXT normal getDisplayMedia also hung and the handler was not even invoked",
+                "Same harness: callback({}) throws 'Video was requested, but no video stream was provided' in main but rejects the renderer with AbortError, and the next request succeeds (video=1 audio=1)",
+                "https://github.com/electron/electron/issues/47981 (handler exception -> screen sharing hangs, later requests fail)",
+                "Upstream has the identical handler: git show upstream/master:src/utils/window.js lines 36-43"
+            ],
+            "explanation": "On Windows (and Linux) startCapture always calls getDisplayMedia, which goes through this handler. On macOS the fork never calls getDisplayMedia (SystemAudioDump plus desktopCapturer stills), so the Mac never exercises it. If getSources rejects even once on the Windows box (capture service error, RDP or GPU driver issues), the getDisplayMedia promise never settles. Gemini has already connected, but SessionController stays in 'starting', the UI stays on the main view, and pressing Start again returns 'A meeting is already starting or active'. Every later getDisplayMedia request also hangs until the app restarts. To the user this looks like 'not working at all'. Whether getSources actually fails on the user's machine is unverified.",
+            "fix": "In window.js wrap the handler: getSources(...).then(s => { if (!s.length) throw new Error('no screen'); callback({ video: s[0], audio: 'loopback' }); }).catch(err => { console.error(err); try { callback({}); } catch {} }). In renderer getLoopbackStream, Promise.race getDisplayMedia against a ~8 s timeout so startCapture always returns.",
+            "presentInFork": "no"
+        },
+        {
+            "title": "Windows 'loopback' records only the default playback device, so meeting audio routed elsewhere reaches Gemini as silence",
+            "stage": "audio-capture",
+            "severity": "major",
+            "confidence": "possible",
+            "evidence": [
+                "src/utils/window.js:152 @8c49d85 requests audio: 'loopback' (Electron maps it to Chromium kLoopbackInputDeviceId)",
+                "Chromium media/audio/audio_device_description.h: kLoopbackAllDevicesId is 'Similar to kLoopbackInputDeviceId, but instead of capturing audio being played on the default playback device, audio from *all* audio devices will be captured'",
+                "Chromium media/audio/win/audio_low_latency_input_win.cc: loopback -> data_flow eRender, role eConsole -> enumerator->GetDefaultAudioEndpoint(data_flow, role, ...)",
+                "node_modules/electron/electron.d.ts:23872-23877: Electron exposes only 'loopback' | 'loopbackWithMute' (no all-devices option)",
+                "Upstream Windows report https://github.com/sohzm/cheating-daddy/issues/161 ('Application does not detect audio' on 3 PCs; no device selection)",
+                "Mac path: gemini.js:1509-1568 SystemAudioDump captures system output with no default-device dependency"
+            ],
+            "explanation": "On Windows the only system-audio source is WASAPI endpoint loopback of the default console render device. Zoom/Teams often play to the 'Default Communication Device' or to a headset picked in the app. A Bluetooth headset switches to a separate 'Hands-Free' endpoint once its mic is in use. In all of these cases the loopback track is valid but silent. The AudioWorklet then sends zero frames, validateAudioFrame accepts them, Gemini hears nothing, and no answers appear, with no error shown. The Mac's SystemAudioDump has no such dependency, so the same meeting works there. Whether the user's setup routes audio this way is unknown.",
+            "fix": "Short term: tell Windows users to set the meeting app's speaker to the Windows default output device (and avoid BT hands-free). Code: show a 'no system audio detected' warning when N seconds of frames have zero RMS, and test getDisplayMedia audio constraint restrictOwnAudio:true (Electron 44 maps it to kLoopbackWithoutChromeId process loopback, PR https://github.com/electron/electron/pull/52455) to see whether it records non-default endpoints on Windows.",
+            "presentInFork": "no"
+        },
+        {
+            "title": "Gemini 3.8 turn-closing gap filler is mac-only; Windows sends digital-zero silence the fork deliberately avoids, and unclosed voice turns have no watchdog",
+            "stage": "answers-display",
+            "severity": "major",
+            "confidence": "possible",
+            "evidence": [
+                "src/utils/liveAudioGapFiller.js:1-3 @8c49d85: '3.8 Live only closes a user turn while trailing audio keeps arriving ... (digital zeros are avoided on purpose)'",
+                "src/utils/gemini.js:1544 liveGapFiller.start() only inside startMacOSAudioCapture (which returns early if platform !== 'darwin', line 1510); nothing else calls start()",
+                "git show 9043400 -- src/utils/gemini.js: removed observeLiveAudioEnergy + sendRealtimeInput({audioStreamEnd:true}) (the previous turn-close mechanism for every platform) and added the mac-only gap filler",
+                "Harness /tmp/cdwin-RendererCaptureFlow (fork audio-worklet.js, Electron 44): silent input -> 36/36 frames all-zero, still delivered at ~24/s; Chromium audio_low_latency_input_win.cc: endpoint loopback 'requires active output audio to trigger the event', so with nothing playing WebAudio fills the gap with zeros",
+                "src/utils/liveTurnWatchdog.js:24-41 + gemini.js:151,588: the watchdog arms only on output or typed turns, not on voice turns that never close"
+            ],
+            "explanation": "On macOS the gap filler adds a low noise floor whenever SystemAudioDump stops delivering frames, so Gemini 3.8's VAD sees non-zero trailing audio and closes the turn. On Windows the worklet keeps producing frames, so the gap filler never starts and there is no time gap. In silence those frames are exact zeros, which the fork's own design note implies 3.8 may not treat as end-of-speech. If that note is right, Windows voice turns would transcribe but never get an answer: the status stays 'Listening' and nothing finalizes them. Gemini's behavior on zero-valued audio is unverified.",
+            "fix": "Make turn-closing platform-independent. Start liveGapFiller when a BYOK Live session starts (or on the first send-audio-frame), and in routeAudioFrame skip noteRealFrame / substitute createNoiseFrame for frames whose samples are all zero (or below a tiny RMS). Stop it in close-session as today.",
+            "presentInFork": "no"
+        },
+        {
+            "title": "Windows audio failure is swallowed: the meeting starts 'successfully' with no audio and only a status-bar note",
+            "stage": "session-start",
+            "severity": "minor",
+            "confidence": "confirmed",
+            "evidence": [
+                "src/utils/renderer.js:709-717 @8c49d85: getDisplayMedia errors are pushed into warnings[]; mediaStream without audio tracks -> 'System audio: selected source has no audio'",
+                "src/utils/renderer.js:734-739: with no inputs it returns { success: true, audioAvailable: false } and only calls setStatus('Audio unavailable — text and Analyze Screen still work')",
+                "CheatingDaddyApp.js:702-705 only throws when capture.success is false; CheatingDaddyApp.js:1082 shows statusText as small live-bar text"
+            ],
+            "explanation": "On macOS a SystemAudioDump failure is also non-fatal, but the user's Mac works, so this path stays hidden. On Windows, any loopback rejection (NotReadableError, NotAllowedError, AbortError) still produces an active meeting with a running timer and no voice answers. The only signal is a status string, which later 'update-status' messages can overwrite. This makes 'not working on Windows' hard to diagnose.",
+            "fix": "When audioMode needs system audio and inputs lacks 'system', show a persistent error card (addNewResponse) with the DOMException name/message and log it to the diagnostics directory. Optionally fail the start in speaker_only mode.",
+            "presentInFork": "no"
+        },
+        {
+            "title": "getDisplayMedia video track (1 fps desktop capture) stays live for the whole Windows meeting although it is never used",
+            "stage": "screen-capture",
+            "severity": "minor",
+            "confidence": "confirmed",
+            "evidence": [
+                "src/utils/renderer.js:635 requests video {frameRate:1, 1920x1080}; renderer.js:711 keeps mediaStream; tracks are stopped only in stopCapture (renderer.js:767)",
+                "Screenshots use main-process desktopCapturer via 'capture-screen-still' (renderer.js:508, gemini.js:1959-1963), not this video track",
+                "Harness /tmp/cdwin-RendererCaptureFlow/e2e with STOPVIDEO=1: after mediaStream.getVideoTracks().forEach(t=>t.stop()) audio kept flowing (146/146 frames accepted, 106 non-zero)"
+            ],
+            "explanation": "Electron requires a video source alongside 'loopback' (electron.d.ts:23869-23877), but the fork never consumes the video track. On Windows it keeps a desktop-duplication capture running for the whole meeting, adding CPU/GPU load to an always-on-top window. Whether Windows 11 also shows a capture border is [INFERENCE]. This does not block audio.",
+            "fix": "Right after getLoopbackStream resolves, call mediaStream.getVideoTracks().forEach(t => t.stop()); audio continues (verified on Electron 44).",
+            "presentInFork": "no"
+        },
+        {
+            "title": "Fresh Windows profile defaults providerMode to 'cloud', not the BYOK mode used on the Mac",
+            "stage": "session-start",
+            "severity": "minor",
+            "confidence": "possible",
+            "evidence": [
+                "src/storage.js:26-34 @8c49d85 default preferences have no providerMode key",
+                "CheatingDaddyApp.js:748, MainView.js:541 and renderer.js:697 all use prefs.providerMode || 'cloud'",
+                "CheatingDaddyApp.js:722-725: cloud requires creds.cloudToken, otherwise 'Cloud token is required'"
+            ],
+            "explanation": "Preferences are stored per machine. Unless the user switched to the BYOK tab on the Windows install, Start takes the cloud path and fails with 'Cloud token is required' (or uses the cloud backend instead of Gemini 3.8 Live). This is a configuration difference, not a platform bug, but it produces a 'works on Mac, not on Windows' report with identical code.",
+            "fix": "Confirm the Windows install shows the BYOK/API-key mode selected; consider defaulting providerMode to 'byok' when an API key is saved.",
+            "presentInFork": "n/a"
+        },
+        {
+            "title": "'both' mode halves system and mic levels (worklet averages channels)",
+            "stage": "audio-capture",
+            "severity": "minor",
+            "confidence": "confirmed",
+            "evidence": [
+                "src/audio-worklet.js:15-16 @8c49d85: value += channel[index]; pending = value / channels.length",
+                "renderer.js:655-660: two streams go to a 2-channel merger, so loopback and mic each contribute at 0.5 gain"
+            ],
+            "explanation": "In Windows 'both' mode, interviewer audio from loopback is attenuated by 6 dB and mixed with the user's own mic. With server VAD at START/END_SENSITIVITY_LOW, quiet loopback audio is less likely to start a turn. This affects only the renderer path, so the Mac in speaker_only mode never hits it.",
+            "fix": "Sum with clipping (as mixPcm16 in audioPipeline.js:74-82 does) instead of averaging, or keep the mic as a separate source.",
+            "presentInFork": "no"
+        }
+    ],
+    "openQuestions": [
+        "Exact Windows symptom: does the UI reach the assistant view (finding 1 rules in or out), and what does the live bar status say ('Audio unavailable…' / 'Listening with …')?",
+        "Windows renderer DevTools console: any 'Failed to send audio frame' errors, or main-process 'unhandledRejection' from window.js:151?",
+        "Which output device do the Windows meeting app and headset use versus the Windows default playback device (finding 2)?",
+        "Does gemini-3.8-live close VAD turns on exact-zero PCM (finding 3)? Testable from the Mac by streaming a speech clip followed by zeros over the fork's transport.",
+        "Contents of the diagnostics logs (app.getPath('logs')/diagnostics, index.js:115) on the Windows box: audioGapsFilled should stay 0 on Windows, and liveUnansweredTurns would show turns that were transcribed but never answered."
+    ]
+}

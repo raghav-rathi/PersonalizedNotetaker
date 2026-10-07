@@ -1,0 +1,543 @@
+{
+    "summary": "I mapped the fork at master 8c49d85 by reading the code only; I did not launch or build anything. One Electron BrowserWindow runs the UI with nodeIntegration:true, contextIsolation:false and no preload; src/preload.js contains only comments. src/index.html loads lit-based ES-module components plus two classic <script> tags. One of them, script.js, does not exist under src/. The other, utils/renderer.js, uses CommonJS require() and resolves paths relative to index.html. The main process owns storage, the Gemini Live websocket, the cloud websocket, Ollama/Whisper (local mode), Groq HTTP, global shortcuts, the tray and the uiohook Alt/Option-tap hide.\n\nSystem audio is captured differently on each platform:\n- **macOS:** the main process runs the bundled SystemAudioDump binary. It produces 24 kHz stereo audio, which is converted to mono, resampled to 16 kHz and sent to Gemini Live (gemini.js:1509-1600). The renderer AudioWorklet runs only in mic modes.\n- **Windows and Linux:** the renderer calls getDisplayMedia, which goes through the main-process setDisplayMediaRequestHandler (sources[0] plus audio:'loopback'). Audio then flows AudioWorklet → `send-audio-frame` IPC → routeAudioFrame. For BYOK and local modes this is 16 kHz.\n\nSo on Windows the AudioWorklet/`send-audio-frame` path is the only route for system audio. On a Mac in the default speaker_only mode that path never runs.\n\nWindows-relevant asymmetries I noticed:\n- **Gap filler is macOS-only.** LiveAudioGapFiller, whose comment says Gemini 3.8 Live only closes a turn while trailing audio keeps arriving and avoids digital zeros, is started only inside startMacOSAudioCapture (gemini.js:1544). On Windows it never runs.\n- **Picker failure can hang capture.** The display-media handler (window.js:149-156) has no .catch and never calls `callback` if getSources rejects or returns nothing. [INFERENCE] getDisplayMedia, and with it the session start, would hang.\n- **Provider mode defaults to cloud.** It defaults to 'cloud' when the providerMode preference is unset (CheatingDaddyApp.js:748, MainView.js:541, renderer.js:697), and DEFAULT_PREFERENCES in storage.js has no providerMode. A fresh Windows profile therefore starts in cloud mode and needs a cloudToken, unlike a Mac where BYOK was already selected.\n- **Unheard or dead IPC.** Main sends `session-initializing`, but no renderer listener exists. `send-audio-content`, `send-mic-audio-content`, `get-current-session`, `start-new-session` and `log-message` have handlers but no renderer callers.\n- **Missing and unused files.** components/index.js exports a nonexistent AdvancedView.js, but it is never loaded. utils/windowResize.js has no callers.\n- **Electron 44 ABI.** Native modules (uiohook-napi, onnxruntime-node, sharp) must be rebuilt for the Electron 44 ABI on Windows. If uiohook fails to load, the error is caught (optionTapMonitor.js:16-25) and only Alt-tap hide is lost.\n\nThe main agent may want to diff these paths against upstream/master 3cccc36; I did not do that comparison.",
+    "architecture": "## 1. Process model\n- **Main process**: `src/index.js` (package.json `main`). The first line exits on `electron-squirrel-startup` (index.js:1-3). It appends Chromium switches per platform (index.js:10-19). On `whenReady` it runs `storage.initializeStorage()` → (darwin only) a `desktopCapturer.getSources` permission poke → `createMainWindow()` (utils/window.js `createWindow`) → `createTray()` → `startDiagnostics` (writes `<logs>/diagnostics/performance.jsonl`) → `setupGeminiIpcHandlers` (gemini.js:1838) → `setupStorageIpcHandlers` (index.js:144) → `setupGeneralIpcHandlers` (index.js:352). Renderer recovery: `did-fail-load`, `render-process-gone` and `unresponsive` show a dialog (index.js:57-97). There is also a 10 s `renderer-ready` handshake timeout that force-shows the window.\n- **BrowserWindow** (window.js:123-146): frame:false, alwaysOnTop, hasShadow:false, autoHideMenuBar, `transparent = platform!=='win32'`, `show = platform==='win32'`, `backgroundColor` '#0a0a0a' on win32 and '#00000000' elsewhere, `skipTaskbar: isWin`, `roundedCorners: !isWin`. webPreferences: **nodeIntegration: true, contextIsolation: false, no `preload`** (src/preload.js is an empty comment stub and is not referenced), backgroundThrottling:false, enableBlinkFeatures:'GetDisplayMedia', webSecurity:true. Afterwards: setResizable(false) and setVisibleOnAllWorkspaces(true,{visibleOnFullScreen:true}). It loads `src/index.html` via `loadFile(path.join(__dirname,'../index.html'))`.\n- **Display media**: `session.defaultSession.setDisplayMediaRequestHandler((req,cb)=>desktopCapturer.getSources({types:['screen']}).then(s=>cb({video:s[0],audio:'loopback'})),{useSystemPicker:true})` (window.js:148-157). It has no catch or empty-sources guard. `useSystemPicker` only has an effect on macOS.\n- **Renderer load order** (src/index.html, tail of body): `assets/marked-4.3.0.min.js` and `assets/highlight-11.9.0.min.js` (classic scripts) → highlight CSS → `<script type=\"module\" src=\"components/app/CheatingDaddyApp.js\">`. That module statically imports lit-core-2.7.4 and MainView, CustomizeView, HelpView, HistoryView, AssistantView, OnboardingView, AICustomizeView and FeedbackView. Then come `<cheating-daddy-app id=\"cheatingDaddy\">`, `<script src=\"script.js\">` (the file does not exist in src/, so it 404s) and `<script src=\"utils/renderer.js\">`, a classic script that uses Node `require('electron')` and `require('./utils/overlayVisibility')`. Relative requires resolve from src/index.html; commit 133406a fixed this. CSP: `script-src 'self' 'unsafe-inline'`.\n- ES-module components reach Node through `window.require('electron')` and `window.require('./utils/answerEvents' | './utils/sessionController' | './utils/visibleAnswerRange')`. AppHeader.js:192 uses bare `require`. Global glue: `window.cheatingDaddy` (renderer.js:1113-1155) exposes storage wrappers, initializeGemini/Cloud/Local, startCapture/stopCapture, sendTextMessage, handleShortcut, theme, getVersion, isLinux/isMacOS/isWindows. renderer.js:1157-1161 sends `renderer-ready` after `cheating-daddy-app` upgrades.\n- **Audio worklet**: `src/audio-worklet.js` (`meeting-pcm-processor`) is loaded with `audioContext.audioWorklet.addModule(new URL('./audio-worklet.js', location.href))` (renderer.js:646). It averages the input channels and posts Int16 frames of `sampleRate*0.04` samples.\n- **Packaging** (forge.config.js): asar with unpack glob for onnxruntime-node, onnxruntime-common, @huggingface/transformers, sharp, @img and uiohook-napi. `extraResource: ['./src/assets/SystemAudioDump']` is copied on every platform. Makers: squirrel (no platform filter, so Windows by default), dmg (darwin), AppImage (linux). Plugins: auto-unpack-natives and Fuses (RunAsNode off, OnlyLoadAppFromAsar on, EmbeddedAsarIntegrityValidation on, CookieEncryption on). package.json: electron 44.3.0, forge 7.11.2. deps: @google/genai ^2.19, @huggingface/transformers ^3.8.1, ollama, uiohook-napi ^1.5.5, ws ^8.19, electron-squirrel-startup. optionalDeps: @img/sharp-win32-x64. overrides: node-abi 3.96.0.\n\n## 2. Module responsibilities\n**Main process**\n- `src/index.js`: entry point. Squirrel exit, Chromium feature switches, tray (Show / Stop meeting / Quit), renderer crash recovery, storage IPC (`storage:*`) and general IPC (renderer-ready, get-app-version, quit-application, open-external, log-message), app lifecycle.\n- `src/utils/window.js`: creates the BrowserWindow, display-media handler, content protection, Windows z-order/taskbar handling, Alt/Option-tap hide hookup, default keybinds, `updateGlobalShortcuts` (move, toggleVisibility, Windows Ctrl+\\\\ fallback, click-through, nextStep via executeJavaScript, prev/next response, scroll, emergencyErase), window IPC (view-changed resizes to 850x400 or 1100x800, window-minimize, update-keybinds, toggle-window-visibility, update-sizes no-op).\n- `src/utils/overlayVisibility.js`: pure per-platform helpers (Alt keycodes 56/3640, chord detection, default toggle key, keybind migration, show vs showInactive, transparency, background colour, show-on-create, alpha clamp).\n- `src/utils/optionTapMonitor.js`: global keyboard hook via `uiohook-napi` that detects a lone Alt/Option tap and toggles the overlay. Asks for macOS Accessibility; on other platforms it is a no-op returning true.\n- `src/utils/windowBounds.js`: `clampBoundsToWorkArea` keeps the window on screen after display changes.\n- `src/utils/screenStill.js`: main-process screenshot via `desktopCapturer.getSources({types:['screen'],thumbnailSize})`. Picks the primary display, encodes JPEG (40/60/85 %) at max 1280 px width, maps macOS permission errors.\n- `src/utils/diagnostics.js`: every 15 s appends memory, app metrics and `global.getMeetingDiagnostics()` to `<logs>/diagnostics/performance.jsonl`, rotating at 5 MB.\n- `src/storage.js`: JSON-file storage in an OS-specific config dir (config, credentials, preferences, keybinds, limits), Groq/Gemma usage limits, and the `HistoryStore` facade.\n\n**AI providers / session (main)**\n- `src/utils/gemini.js` (~2,239 lines): the session hub. Provider-mode state (`byok`/`cloud`/`local`), Gemini Live session init/reconnect/resumption, transcript ingestion, answer streaming (`answer-event`), typed-turn queue, code-answer card (gemini-3.8-flash), screen analysis routing, Groq fallback (Whisper STT plus chat), Gemma, meeting summary (gemini-3.1-flash-lite), macOS SystemAudioDump spawn and stop, audio routing (`routeAudioFrame`), and all session IPC handlers (gemini.js:1838-2220).\n- `src/utils/geminiLiveTransport.js`: raw `ws` client to `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=…`. Sends `setup`, resolves on `setupComplete`, 15 s setup timeout. Exposes sendRealtimeInput, sendClientContent, sendToolResponse and bufferedBytes.\n- `src/utils/geminiLiveSessionConfig.js`: Live setup config. AUDIO modality, input and output transcription, automatic VAD (LOW sensitivity, silence 800 or 1200 ms), START_OF_ACTIVITY_INTERRUPTS, context compression, system instruction. Contains uncommitted user prompt edits.\n- `src/utils/liveAudioGapFiller.js`: injects low-amplitude noise frames when real audio stops for ≥300 ms so Gemini 3.8 Live can close turns. Only started by the macOS SystemAudioDump path.\n- `src/utils/liveTurnWatchdog.js`: finishes a Live turn that stalls without `turnComplete`.\n- `src/utils/analyzeScreenSend.js`: chooses the screen-analysis path (cloud/local/http/live/groq), builds the gemini-3.8-flash request and the Live screen-context turn.\n- `src/utils/answerFormatting.js`: formats Live transcript answers; `needsCodeAnswer` heuristic.\n- `src/utils/answerEvents.js`: turn IDs and `emitAnswer` (send `answer-event`); `applyAnswerEvent` reducer used by the renderer.\n- `src/utils/audioPipeline.js`: `BoundedAudioQueue`, `PcmChunker`, `mixPcm16`, `validateAudioFrame` (16k/24k, ≤64 KiB, even length).\n- `src/utils/boundedTurnQueue.js`: queue of up to 3 pending typed questions.\n- `src/utils/connectionGeneration.js`: generation token that discards callbacks from stale connections.\n- `src/utils/historyStore.js`: incremental JSONL session archive (`<id>.jsonl` plus `<id>.meta.json`) and `buildRelevantContext` retrieval.\n- `src/utils/cloud.js`: cloud provider websocket `wss://api.cheatingdaddy.com/ws?token=…`. Messages: set_config, binary PCM, test_text, image, end_connection. Receives transcription and response_* events.\n- `src/utils/localai.js`: local provider. `ollama` client (default host http://127.0.0.1:11434, model llama3.1), `@huggingface/transformers` Whisper (default Xenova/whisper-small, q8, cache in `userData/whisper-models`), RMS VAD at 16 kHz, image questions via Ollama `images`.\n- `src/utils/transcriptOverlap.js`: removes repeated words between overlapping STT segments.\n- `src/utils/prompts.js`: profile system prompts and `getSystemPrompt`. Contains uncommitted user edits.\n- `src/audioUtils.js`: `saveDebugAudio` helper used when `DEBUG_AUDIO` is set.\n\n**Renderer glue**\n- `src/utils/renderer.js`: classic script. Storage IPC wrapper, provider init (`initialize-gemini|cloud|local`), capture (`startCapture`: macOS uses SystemAudioDump via IPC, Windows/Linux use `getDisplayMedia` loopback, plus optional getUserMedia mic, both fed into the AudioWorklet → `send-audio-frame`), screenshot queue (`capture-screen-still` → `send-image-content`), `sendTextMessage`, theme system, platform flags, `window.cheatingDaddy`. `legacyStartCapture` and `legacyStopCapture` (renderer.js:218-310, 580-614) are dead code with no callers.\n- `src/audio-worklet.js`: AudioWorkletProcessor that turns float channels into 40 ms Int16 frames.\n- `src/utils/sessionController.js`: meeting lifecycle state machine (idle → starting → active → stopping) used by CheatingDaddyApp.\n- `src/utils/visibleAnswerRange.js`: virtualisation window (30 answers) for AssistantView.\n- `src/utils/windowResize.js`: `update-sizes` invoke helper; no callers.\n\n**UI components (lit ES modules)**\n- `components/app/CheatingDaddyApp.js`: root element. View routing, IPC listeners (answer-event, stop-meeting-requested, update-status, click-through-toggled, reconnect-failed, whisper-downloading, stealth-hidden-changed), session start via SessionController (`providerMode` default 'cloud'), update check against the raw.githubusercontent package.json, `view-changed` send.\n- `components/app/AppHeader.js`: header bar, version check, Hide shortcut hint.\n- `components/views/MainView.js`: start screen. Provider mode selector (cloud token, Gemini key, Groq key, Ollama settings); Cmd/Ctrl+Enter starts a session.\n- `components/views/AssistantView.js`: answer cards (marked plus highlight.js), navigation and scroll IPC listeners, text input, Analyze Screen.\n- `components/views/CustomizeView.js`: preferences, keybind editor (`update-keybinds`), Google Search toggle (`update-google-search-setting`), clear data plus quit.\n- `components/views/HelpView.js`: keybind cheat-sheet and links.\n- `components/views/HistoryView.js`: archived sessions via `storage:*`.\n- `components/views/OnboardingView.js`: first-run slides.\n- `components/views/AICustomizeView.js`: custom prompt and profile editing.\n- `components/views/FeedbackView.js`: POSTs feedback to `https://api.cheatingdaddy.com/api/feedback`, detects OS via navigator.platform.\n- `components/views/sharedPageStyles.js`: shared CSS.\n- `components/index.js`: barrel export, not loaded by index.html; exports a nonexistent `AdvancedView.js`.\n\n## 3. Provider modes and data flow\n`currentProviderMode` in gemini.js is set by the `initialize-*` handlers. The renderer-side mode comes from `prefs.providerMode || 'cloud'` (CheatingDaddyApp.js:748; renderer.js:697 chooses the capture sample rate: 24000 for cloud, 16000 otherwise).\n\n**Audio in (all modes)**\n- **macOS (default speaker_only)**: renderer `invoke('start-macos-audio')` → gemini.js:2110 → `startMacOSAudioCapture` (1509) runs `pkill -x SystemAudioDump`, then spawns `SystemAudioDump` (`process.resourcesPath` when packaged, else `src/assets`). stdout is 24 kHz s16 stereo. It is chunked to 40 ms and converted to mono, then sent to cloud (`sendCloudAudio`), local (`processLocalAudio` 24k→16k), byok (`enqueueLivePcm` 24k→16k), or the Groq fallback (`processAudioForWhisper`). The macOS path also starts `liveGapFiller`. Mic (mic_only/both) uses getUserMedia → AudioWorklet → `send-audio-frame`.\n- **Windows/Linux**: `getLoopbackStream` → `navigator.mediaDevices.getDisplayMedia({video 1 fps, audio {sampleRate, mono, no AEC/NS/AGC}})` → main handler `{video: sources[0], audio:'loopback'}` → AudioContext(sampleRate) + `meeting-pcm-processor` → `ipcRenderer.invoke('send-audio-frame', {generation, source, sequence, capturedAt, sampleRate, pcm})` (renderer.js:677). The renderer stops sending when 50 sends are already pending. Main: `validateAudioFrame` → `routeAudioFrame` (gemini.js:1819). Cloud gets raw PCM over the ws, local goes to `processLocalAudio`, byok goes to `enqueueLivePcm` (16k passthrough) → `BoundedAudioQueue` → `drainGeminiQueue` (it backs off when ws bufferedBytes > 64 KB and closes the session after 2 s of congestion) → `sendRealtimeInput({audio:{mimeType:'audio/pcm;rate=16000'}})`. The gap filler is never started on this path.\n\n**BYOK (Gemini API key)**\n- Start: `initialize-gemini(apiKey, customPrompt, profile, language)` → `initializeGeminiSession` → `connectGeminiLive` with model `gemini-3.8-live` (gemini.js:66) at the BidiGenerateContent websocket, with tools `search_meeting` (BLOCKING function) and optionally `googleSearch`.\n- Answers: Live `outputTranscription` text (AUDIO modality, with the spoken answer's transcript used as text) → `ingestLiveOutputTranscription` → `emitAnswer` → `answer-event` start/update/complete → `CheatingDaddyApp.handleAnswerEvent`. Turn end comes from `turnComplete`, the watchdog or a client silence timer. `inputTranscription` drives `scheduleCodeAnswerForVoiceTurn`. Code questions also stream a separate card from `gemini-3.8-flash` (`generateContentStream`, @google/genai HTTPS).\n- Screenshots: renderer `capture-screen-still` (main desktopCapturer JPEG) → `send-image-content`. With an API key the 'http' path sends `gemini-3.8-flash` `generateContentStream` with the image plus prompt (analyzeScreenSend.js:65). The answer is streamed to the renderer, then the image and answer are pushed into Live with `sendClientContent(turnComplete:false)`. If that returns no text, it falls back to a forced Live turn (`sendClientContent` with turnComplete:true).\n- Typed text: `send-text-message` → `dispatchLiveTypedTurn` → `sendRealtimeInput({text})`. It is queued (max 3) while a Live turn is active.\n- Groq fallback (byok with a Groq key and no Live session): STT `whisper-large-v3-turbo` at api.groq.com/openai/v1/audio/transcriptions, chat at /chat/completions with the daily-limited model from `getModelForToday` (qwen3-32b / gpt-oss-120b / gpt-oss-20b per storage limits), image `meta-llama/llama-4-scout-17b-16e-instruct`. Visual keywords trigger `auto-capture-screenshot`. Gemma path: `gemma-3-27b-it`. Meeting summary: `gemini-3.1-flash-lite` after 12 turns.\n\n**Cloud (cheatingdaddy.com token)**\n- `initialize-cloud(token, profile, customPrompt)` → `connectCloud` (wss://api.cheatingdaddy.com/ws?token=…, 10 s timeout) → sends `{type:'set_config', profile, user_context}`.\n- Audio: binary PCM frames (24 kHz from the worklet; macOS SystemAudioDump frames are 24 kHz mono). They are dropped if bufferedAmount > 96000.\n- Text: `{type:'test_text', text}`. Image: `{type:'image', image}`, followed by text.\n- Answers: server `response_start/response_chunk/response_end` → `answer-event`. `transcription` → status.\n\n**Local (Ollama + Whisper)**\n- `initialize-local(host, model, whisperModel, profile, prompt)` → Ollama connectivity test, then `@huggingface/transformers` pipeline('automatic-speech-recognition', model, {dtype:'q8', device:'auto'}), model cache in `userData/whisper-models`.\n- Audio → 16k RMS VAD → Whisper → `ollamaClient.chat({stream:true})` → `answer-event`.\n- Screenshots and typed text use `sendLocalImage` (Ollama `images:[base64]`) or `sendLocalText`.\n\n## 6. Persistent state\n- **Config dir** (storage.js:44-57): win32 `%USERPROFILE%\\AppData\\Roaming\\cheating-daddy-config`, darwin `~/Library/Application Support/cheating-daddy-config`, other platforms `~/.config/cheating-daddy-config`. It is independent of Electron `userData`.\n  - `config.json`: configVersion 1, onboarded, layout. A version mismatch triggers re-init via `initializeStorage`.\n  - `credentials.json`: **plaintext** `apiKey` (Gemini), `groqApiKey`, `cloudToken`.\n  - `preferences.json`: customPrompt, selectedProfile, selectedLanguage, audioMode (default speaker_only), backgroundTransparency, googleSearchEnabled, vadPreset, ollamaHost/Model, whisperModel, theme, and `providerMode`, which is absent from the defaults so the code falls back to 'cloud'.\n  - `keybinds.json`: null means platform defaults. On win32 a saved `Ctrl+\\\\` toggle is migrated to `Alt` (window.js:236-239).\n  - `limits.json`: per-day Groq and Gemma character counters.\n  - `history/`: `<sessionId>.jsonl` turn and screen records plus `<sessionId>.meta.json` (legacy `<id>.json` is still readable).\n- **Electron paths**: `app.getPath('logs')/diagnostics/performance.jsonl` (rotated ×3 at 5 MB). `app.getPath('userData')/whisper-models` (local mode Whisper cache). The default session's Chromium localStorage is read by `getStoredSetting` through executeJavaScript, which is legacy.\n- **In-memory only**: conversationHistory, screenAnalysisHistory, Live resumption handle, last screenshot JPEG, typed-turn queue.",
+    "ipcChannels": [
+        {
+            "channel": "storage:get-config",
+            "direction": "renderer->main invoke",
+            "handler": "src/index.js:146 (caller renderer.js:43)"
+        },
+        {
+            "channel": "storage:set-config",
+            "direction": "renderer->main invoke",
+            "handler": "src/index.js:155 (caller renderer.js:47)"
+        },
+        {
+            "channel": "storage:update-config",
+            "direction": "renderer->main invoke",
+            "handler": "src/index.js:165 (caller renderer.js:50)"
+        },
+        {
+            "channel": "storage:get-credentials",
+            "direction": "renderer->main invoke",
+            "handler": "src/index.js:176 (caller renderer.js:55)"
+        },
+        {
+            "channel": "storage:set-credentials",
+            "direction": "renderer->main invoke",
+            "handler": "src/index.js:185 (caller renderer.js:59)"
+        },
+        {
+            "channel": "storage:get-api-key",
+            "direction": "renderer->main invoke",
+            "handler": "src/index.js:195 (caller renderer.js:62)"
+        },
+        {
+            "channel": "storage:set-api-key",
+            "direction": "renderer->main invoke",
+            "handler": "src/index.js:204 (caller renderer.js:66)"
+        },
+        {
+            "channel": "storage:get-groq-api-key",
+            "direction": "renderer->main invoke",
+            "handler": "src/index.js:214 (caller renderer.js:69)"
+        },
+        {
+            "channel": "storage:set-groq-api-key",
+            "direction": "renderer->main invoke",
+            "handler": "src/index.js:223 (caller renderer.js:73)"
+        },
+        {
+            "channel": "storage:get-preferences",
+            "direction": "renderer->main invoke",
+            "handler": "src/index.js:234 (caller renderer.js:78)"
+        },
+        {
+            "channel": "storage:set-preferences",
+            "direction": "renderer->main invoke",
+            "handler": "src/index.js:243 (caller renderer.js:82)"
+        },
+        {
+            "channel": "storage:update-preference",
+            "direction": "renderer->main invoke",
+            "handler": "src/index.js:253 (caller renderer.js:85)"
+        },
+        {
+            "channel": "storage:get-keybinds",
+            "direction": "renderer->main invoke",
+            "handler": "src/index.js:264 (caller renderer.js:90)"
+        },
+        {
+            "channel": "storage:set-keybinds",
+            "direction": "renderer->main invoke",
+            "handler": "src/index.js:273 (caller renderer.js:94)"
+        },
+        {
+            "channel": "storage:get-all-sessions",
+            "direction": "renderer->main invoke",
+            "handler": "src/index.js:284 (caller renderer.js:99)"
+        },
+        {
+            "channel": "storage:get-session",
+            "direction": "renderer->main invoke",
+            "handler": "src/index.js:293 (caller renderer.js:103)"
+        },
+        {
+            "channel": "storage:get-session-page",
+            "direction": "renderer->main invoke",
+            "handler": "src/index.js:302 (caller renderer.js:107)"
+        },
+        {
+            "channel": "storage:delete-session",
+            "direction": "renderer->main invoke",
+            "handler": "src/index.js:310 (caller renderer.js:111)"
+        },
+        {
+            "channel": "storage:delete-all-sessions",
+            "direction": "renderer->main invoke",
+            "handler": "src/index.js:320 (caller renderer.js:114)"
+        },
+        {
+            "channel": "storage:get-today-limits",
+            "direction": "renderer->main invoke",
+            "handler": "src/index.js:331 (caller renderer.js:124)"
+        },
+        {
+            "channel": "storage:clear-all",
+            "direction": "renderer->main invoke",
+            "handler": "src/index.js:341 (caller renderer.js:119, triggered by clear-sensitive-data at renderer.js:807)"
+        },
+        {
+            "channel": "renderer-ready",
+            "direction": "renderer->main send (ipcMain.on)",
+            "handler": "src/index.js:353 (sender renderer.js:1160)"
+        },
+        {
+            "channel": "get-app-version",
+            "direction": "renderer->main invoke",
+            "handler": "src/index.js:356 (caller renderer.js:1115 via cheatingDaddy.getVersion; used by AppHeader.js:163, FeedbackView.js:124)"
+        },
+        {
+            "channel": "quit-application",
+            "direction": "renderer->main invoke",
+            "handler": "src/index.js:360 (callers CheatingDaddyApp.js:676, CustomizeView.js:581)"
+        },
+        {
+            "channel": "open-external",
+            "direction": "renderer->main invoke",
+            "handler": "src/index.js:371 (callers AppHeader.js:193, CheatingDaddyApp.js:771, 778, 821)"
+        },
+        {
+            "channel": "log-message",
+            "direction": "renderer->main send (ipcMain.on)",
+            "handler": "src/index.js:382 (no renderer sender found)"
+        },
+        {
+            "channel": "view-changed",
+            "direction": "renderer->main send (ipcMain.on)",
+            "handler": "src/utils/window.js:461 (sender CheatingDaddyApp.js:851)"
+        },
+        {
+            "channel": "window-minimize",
+            "direction": "renderer->main invoke",
+            "handler": "src/utils/window.js:476 (caller CheatingDaddyApp.js:684)"
+        },
+        {
+            "channel": "update-keybinds",
+            "direction": "renderer->main send (ipcMain.on)",
+            "handler": "src/utils/window.js:484 (senders CustomizeView.js:341, 494, 528)"
+        },
+        {
+            "channel": "toggle-window-visibility",
+            "direction": "renderer->main invoke",
+            "handler": "src/utils/window.js:492 (caller CheatingDaddyApp.js:691)"
+        },
+        {
+            "channel": "update-sizes",
+            "direction": "renderer->main invoke",
+            "handler": "src/utils/window.js:508 no-op (callers CheatingDaddyApp.js:810, windowResize.js:5)"
+        },
+        {
+            "channel": "initialize-cloud",
+            "direction": "renderer->main invoke",
+            "handler": "src/utils/gemini.js:1842 (caller renderer.js:202)"
+        },
+        {
+            "channel": "initialize-gemini",
+            "direction": "renderer->main invoke",
+            "handler": "src/utils/gemini.js:1861 (caller renderer.js:164)"
+        },
+        {
+            "channel": "initialize-local",
+            "direction": "renderer->main invoke",
+            "handler": "src/utils/gemini.js:1873 (caller renderer.js:183)"
+        },
+        {
+            "channel": "send-audio-frame",
+            "direction": "renderer->main invoke",
+            "handler": "src/utils/gemini.js:1882 → routeAudioFrame gemini.js:1819 (caller renderer.js:677, AudioWorklet port)"
+        },
+        {
+            "channel": "send-audio-content",
+            "direction": "renderer->main invoke",
+            "handler": "src/utils/gemini.js:1892 (no renderer caller; legacy)"
+        },
+        {
+            "channel": "send-mic-audio-content",
+            "direction": "renderer->main invoke",
+            "handler": "src/utils/gemini.js:1926 (no renderer caller; legacy)"
+        },
+        {
+            "channel": "capture-screen-still",
+            "direction": "renderer->main invoke",
+            "handler": "src/utils/gemini.js:1959 → screenStill.js captureScreenStill (caller renderer.js:508)"
+        },
+        {
+            "channel": "send-image-content",
+            "direction": "renderer->main invoke",
+            "handler": "src/utils/gemini.js:1965 (caller renderer.js:520)"
+        },
+        {
+            "channel": "send-text-message",
+            "direction": "renderer->main invoke",
+            "handler": "src/utils/gemini.js:2050 (caller renderer.js:793)"
+        },
+        {
+            "channel": "start-macos-audio",
+            "direction": "renderer->main invoke",
+            "handler": "src/utils/gemini.js:2110 (returns error on non-darwin; callers renderer.js:232 legacy, 704)"
+        },
+        {
+            "channel": "stop-macos-audio",
+            "direction": "renderer->main invoke",
+            "handler": "src/utils/gemini.js:2127 (callers renderer.js:605 legacy, 774; darwin-only callers)"
+        },
+        {
+            "channel": "close-session",
+            "direction": "renderer->main invoke",
+            "handler": "src/utils/gemini.js:2137 (callers CheatingDaddyApp.js:710, 742)"
+        },
+        {
+            "channel": "get-current-session",
+            "direction": "renderer->main invoke",
+            "handler": "src/utils/gemini.js:2189 (no renderer caller found)"
+        },
+        {
+            "channel": "start-new-session",
+            "direction": "renderer->main invoke",
+            "handler": "src/utils/gemini.js:2198 (no renderer caller found)"
+        },
+        {
+            "channel": "update-google-search-setting",
+            "direction": "renderer->main invoke",
+            "handler": "src/utils/gemini.js:2208 (caller CustomizeView.js:395)"
+        },
+        {
+            "channel": "answer-event",
+            "direction": "main->renderer send",
+            "handler": "sent by answerEvents.js:29 emitAnswer (from gemini.js:153 and others, cloud.js:123/129, localai.js); listener CheatingDaddyApp.js:482"
+        },
+        {
+            "channel": "update-status",
+            "direction": "main->renderer send",
+            "handler": "sent from gemini.js (155, 247, 255, 1306, 1348, …), cloud.js:69/110/136/146, localai.js:129/138/173/…; listeners renderer.js:213 and CheatingDaddyApp.js:485"
+        },
+        {
+            "channel": "session-initializing",
+            "direction": "main->renderer send",
+            "handler": "sent gemini.js:1274/1391/1398/1849/1851/1856, localai.js:327/343/351/367/374; no renderer listener"
+        },
+        {
+            "channel": "reconnect-failed",
+            "direction": "main->renderer send",
+            "handler": "sent gemini.js:1471; listener CheatingDaddyApp.js:489"
+        },
+        {
+            "channel": "whisper-downloading",
+            "direction": "main->renderer send",
+            "handler": "sent localai.js:172/187/192; listener CheatingDaddyApp.js:490"
+        },
+        {
+            "channel": "auto-capture-screenshot",
+            "direction": "main->renderer send",
+            "handler": "sent gemini.js:1197 (Groq visual keyword); listener renderer.js:812"
+        },
+        {
+            "channel": "stop-meeting-requested",
+            "direction": "main->renderer send",
+            "handler": "sent index.js:50 (tray), index.js:68 (recovery); listener CheatingDaddyApp.js:484"
+        },
+        {
+            "channel": "click-through-toggled",
+            "direction": "main->renderer send",
+            "handler": "sent window.js:34; listener CheatingDaddyApp.js:486"
+        },
+        {
+            "channel": "stealth-hidden-changed",
+            "direction": "main->renderer send",
+            "handler": "sent window.js:41, 64; listener CheatingDaddyApp.js:493"
+        },
+        {
+            "channel": "navigate-previous-response",
+            "direction": "main->renderer send",
+            "handler": "sent window.js:381; listener AssistantView.js:561"
+        },
+        {
+            "channel": "navigate-next-response",
+            "direction": "main->renderer send",
+            "handler": "sent window.js:394; listener AssistantView.js:562"
+        },
+        {
+            "channel": "scroll-response-up",
+            "direction": "main->renderer send",
+            "handler": "sent window.js:407; listener AssistantView.js:563"
+        },
+        {
+            "channel": "scroll-response-down",
+            "direction": "main->renderer send",
+            "handler": "sent window.js:420; listener AssistantView.js:564"
+        },
+        {
+            "channel": "clear-sensitive-data",
+            "direction": "main->renderer send",
+            "handler": "sent window.js:442 (emergencyErase); listener renderer.js:807"
+        },
+        {
+            "channel": "(executeJavaScript) cheatingDaddy.handleShortcut('cmd+enter'|'ctrl+enter')",
+            "direction": "main->renderer executeJavaScript",
+            "handler": "window.js:363 nextStep shortcut → renderer.js handleShortcut (~818): start session on main view, else captureManualScreenshot"
+        },
+        {
+            "channel": "(executeJavaScript) localStorage.getItem",
+            "direction": "main->renderer executeJavaScript",
+            "handler": "gemini.js:675-702 getStoredSetting (legacy)"
+        }
+    ],
+    "platformBranches": [
+        {
+            "location": "src/index.js:10",
+            "condition": "process.platform === 'darwin'",
+            "behavior": "Appends disable-features ThumbnailCapturerMac:capture_mode/sc_screenshot_manager, ScreenCaptureKitPickerScreen, ScreenCaptureKitStreamPickerSonoma so desktopCapturer thumbnails are not empty"
+        },
+        {
+            "location": "src/index.js:17",
+            "condition": "process.platform === 'win32'",
+            "behavior": "Appends disable-features CalculateNativeWinOcclusion (keeps the renderer painting when it thinks it is occluded)"
+        },
+        {
+            "location": "src/index.js:42",
+            "condition": "process.platform === 'win32'",
+            "behavior": "Tray icon is assets/logo.ico on Windows, logo.png elsewhere"
+        },
+        {
+            "location": "src/index.js:108",
+            "condition": "process.platform === 'darwin'",
+            "behavior": "Calls desktopCapturer.getSources({types:['screen']}) at startup to trigger the Screen Recording permission prompt (macOS only)"
+        },
+        {
+            "location": "src/index.js:123",
+            "condition": "process.platform !== 'darwin'",
+            "behavior": "window-all-closed quits the app on Windows/Linux; on macOS the app stays alive"
+        },
+        {
+            "location": "src/storage.js:45-54",
+            "condition": "os.platform() === 'win32' / 'darwin' / else",
+            "behavior": "Config dir is ~/AppData/Roaming/cheating-daddy-config (win32), ~/Library/Application Support/cheating-daddy-config (darwin), ~/.config/cheating-daddy-config (other)"
+        },
+        {
+            "location": "src/utils/window.js:46 (overlayVisibility.js:36)",
+            "condition": "getOverlayRestoreMethod(platform) → 'show' when win32",
+            "behavior": "Restoring a hidden overlay uses show() + setAlwaysOnTop('screen-saver',1) + moveTop() on Windows; showInactive() on mac/linux"
+        },
+        {
+            "location": "src/utils/window.js:111,116",
+            "condition": "isWin = process.platform === 'win32'",
+            "behavior": "On Windows: Menu.setApplicationMenu(null) before creating the window"
+        },
+        {
+            "location": "src/utils/window.js:129 (overlayVisibility.js:48)",
+            "condition": "shouldShowWindowOnCreate(platform) → true only on win32",
+            "behavior": "BrowserWindow show:true at creation on Windows; hidden until ready-to-show elsewhere"
+        },
+        {
+            "location": "src/utils/window.js:131 (overlayVisibility.js:40)",
+            "condition": "shouldUseTransparentOverlay(platform) → platform !== 'win32'",
+            "behavior": "transparent:false (opaque) on Windows; transparent:true on mac/linux"
+        },
+        {
+            "location": "src/utils/window.js:134",
+            "condition": "skipTaskbar: isWin",
+            "behavior": "Window hidden from the taskbar on Windows only"
+        },
+        {
+            "location": "src/utils/window.js:135",
+            "condition": "roundedCorners: !isWin",
+            "behavior": "Rounded corners disabled on Windows"
+        },
+        {
+            "location": "src/utils/window.js:145 (overlayVisibility.js:44)",
+            "condition": "getOverlayBackgroundColor(platform) → '#0a0a0a' on win32",
+            "behavior": "Opaque near-black background on Windows; fully transparent '#00000000' elsewhere"
+        },
+        {
+            "location": "src/utils/window.js:161",
+            "condition": "process.platform === 'darwin'",
+            "behavior": "setHiddenInMissionControl(true) + setContentProtection(true) on macOS"
+        },
+        {
+            "location": "src/utils/window.js:170",
+            "condition": "isWin",
+            "behavior": "Windows: setAlwaysOnTop(true,'screen-saver',1), setContentProtection(true), setSkipTaskbar(true), show() if not visible, moveTop(). Linux gets no content protection."
+        },
+        {
+            "location": "src/utils/window.js:195",
+            "condition": "isWin",
+            "behavior": "Different warning text when the Alt/Option tap monitor fails to start (Windows mentions the Ctrl+\\ fallback; mac mentions Accessibility and Cmd+\\)"
+        },
+        {
+            "location": "src/utils/window.js:202",
+            "condition": "isWin",
+            "behavior": "Windows starts the hide-tap monitor on webContents 'did-finish-load'; mac/linux use ready-to-show → show() + start monitor, plus a 2 s fallback show()/start"
+        },
+        {
+            "location": "src/utils/window.js:236-237 (overlayVisibility.js:29)",
+            "condition": "mergeKeybinds(..., platform) and process.platform === 'win32' && saved.toggleVisibility === 'Ctrl+\\'",
+            "behavior": "On Windows the saved toggleVisibility 'Ctrl+\\' is migrated to the default ('Alt') and written back to keybinds.json"
+        },
+        {
+            "location": "src/utils/window.js:250-263",
+            "condition": "isMac = process.platform === 'darwin'",
+            "behavior": "Default keybinds: mac Alt+Arrows / Cmd+M / Cmd+Enter / Cmd+[ ] / Cmd+Shift+Up/Down / Cmd+Shift+E; others Ctrl+Arrows / Ctrl+M / Ctrl+Enter / Ctrl+[ ] / Ctrl+Shift+Up/Down / Ctrl+Shift+E"
+        },
+        {
+            "location": "src/utils/window.js:256 (overlayVisibility.js:24)",
+            "condition": "getDefaultToggleVisibility(platform) → 'Cmd+\\' on darwin else 'Alt'",
+            "behavior": "Hide/show toggle default: Cmd+\\ on macOS, Alt-tap (uiohook) on Windows/Linux. 'Alt' is not registered as a globalShortcut (canRegisterGlobalShortcut is false for modifier-only keys)."
+        },
+        {
+            "location": "src/utils/window.js:328",
+            "condition": "process.platform === 'win32' && keybinds.toggleVisibility === 'Alt'",
+            "behavior": "Registers an extra globalShortcut Ctrl+\\ as the visibility fallback on Windows only"
+        },
+        {
+            "location": "src/utils/window.js:359-360",
+            "condition": "isMac = process.platform === 'darwin'",
+            "behavior": "nextStep shortcut calls cheatingDaddy.handleShortcut('cmd+enter') on mac, 'ctrl+enter' elsewhere (both handled the same way)"
+        },
+        {
+            "location": "src/utils/overlayVisibility.js:52",
+            "condition": "resolveBackgroundAlpha: platform === 'win32'",
+            "behavior": "Theme background alpha forced to 1 (opaque) on Windows; user transparency (default 0.8) elsewhere. Used at renderer.js:1018 and 1097"
+        },
+        {
+            "location": "src/utils/optionTapMonitor.js:62",
+            "condition": "process.platform !== 'darwin'",
+            "behavior": "Accessibility check (systemPreferences.isTrustedAccessibilityClient) only on macOS; Windows/Linux go straight to uiohook start"
+        },
+        {
+            "location": "src/utils/screenStill.js:65 (platform from :112)",
+            "condition": "platform === 'darwin'",
+            "behavior": "Pre-checks systemPreferences.getMediaAccessStatus('screen') and returns the Screen Recording denied message on macOS only"
+        },
+        {
+            "location": "src/utils/screenStill.js:101",
+            "condition": "platform === 'darwin' && /permission|denied|not authorized/",
+            "behavior": "Maps capture errors to the macOS Screen Recording message; Windows returns the raw error"
+        },
+        {
+            "location": "src/utils/gemini.js:1510",
+            "condition": "process.platform !== 'darwin'",
+            "behavior": "startMacOSAudioCapture returns false off macOS. SystemAudioDump spawn, pkill and liveGapFiller.start() happen only on macOS"
+        },
+        {
+            "location": "src/utils/gemini.js:2111",
+            "condition": "process.platform !== 'darwin'",
+            "behavior": "start-macos-audio IPC returns {success:false, error:'macOS audio capture only available on macOS'}"
+        },
+        {
+            "location": "src/utils/renderer.js:27-29",
+            "condition": "isLinux / isMacOS / isWindows from process.platform",
+            "behavior": "Renderer platform flags, exported on window.cheatingDaddy (renderer.js:1149-1151)"
+        },
+        {
+            "location": "src/utils/renderer.js:34",
+            "condition": "isWindows",
+            "behavior": "Adds html.windows-opaque class (index.html CSS: solid #0a0a0a background, no border radius)"
+        },
+        {
+            "location": "src/utils/renderer.js:227 / 261 / else ~281",
+            "condition": "isMacOS / isLinux / else (Windows) in legacyStartCapture",
+            "behavior": "Legacy capture: mac uses SystemAudioDump IPC; Linux uses getDisplayMedia with an audio-less fallback; Windows uses getDisplayMedia loopback with AEC/NS/AGC on. Dead code, no callers."
+        },
+        {
+            "location": "src/utils/renderer.js:604",
+            "condition": "isMacOS in legacyStopCapture",
+            "behavior": "Invokes stop-macos-audio (dead code)"
+        },
+        {
+            "location": "src/utils/renderer.js:703",
+            "condition": "isMacOS && audioMode !== 'mic_only' in startCapture",
+            "behavior": "macOS system audio via invoke('start-macos-audio') (SystemAudioDump in the main process; no renderer stream)"
+        },
+        {
+            "location": "src/utils/renderer.js:709",
+            "condition": "!isMacOS && audioMode !== 'mic_only' in startCapture",
+            "behavior": "Windows/Linux system audio via getDisplayMedia loopback (getLoopbackStream renderer.js:625) → AudioWorklet → send-audio-frame. On failure it only adds a warning and continues; if there are no inputs the status reads 'Audio unavailable — text and Analyze Screen still work'"
+        },
+        {
+            "location": "src/utils/renderer.js:774",
+            "condition": "isMacOS in stopCapture",
+            "behavior": "Invokes stop-macos-audio only on macOS"
+        },
+        {
+            "location": "src/components/app/AppHeader.js:344",
+            "condition": "cheatingDaddy.isMacOS",
+            "behavior": "Header Hide hint shows Cmd+\\ keys on mac (Alt hint otherwise)"
+        },
+        {
+            "location": "src/components/views/CustomizeView.js:240-241",
+            "condition": "cheatingDaddy.isMacOS || navigator.platform.includes('Mac')",
+            "behavior": "Non-mac: a saved toggleVisibility 'Ctrl+\\' is shown and saved as 'Alt'"
+        },
+        {
+            "location": "src/components/views/CustomizeView.js:301-313",
+            "condition": "isMac (same check)",
+            "behavior": "Renderer copy of the default keybinds (Cmd vs Ctrl, Alt vs Ctrl arrows, Cmd+\\ vs Alt). Unlike window.js it has no emergencyErase"
+        },
+        {
+            "location": "src/components/views/HelpView.js:113-114",
+            "condition": "cheatingDaddy.isMacOS || navigator.platform.includes('Mac')",
+            "behavior": "Non-mac migration of 'Ctrl+\\' to 'Alt' for display"
+        },
+        {
+            "location": "src/components/views/HelpView.js:125-137",
+            "condition": "isMac (same check)",
+            "behavior": "Help-page default keybinds per platform"
+        },
+        {
+            "location": "src/components/views/MainView.js:682-683",
+            "condition": "navigator.platform includes 'MAC'",
+            "behavior": "Start-session key in the main view: metaKey+Enter on mac, ctrlKey+Enter elsewhere"
+        },
+        {
+            "location": "src/components/views/MainView.js:797,812",
+            "condition": "navigator.platform includes 'MAC'",
+            "behavior": "Start button hint icon: Cmd icon on mac, Ctrl/up icon elsewhere"
+        },
+        {
+            "location": "src/components/views/FeedbackView.js:130-133",
+            "condition": "navigator.platform includes 'Mac' / 'Win' / 'Linux'",
+            "behavior": "Fills the OS field (macOS/Windows/Linux) in the feedback POST body"
+        },
+        {
+            "location": "src/utils/window.js:149-156 (implicit)",
+            "condition": "setDisplayMediaRequestHandler {useSystemPicker:true}",
+            "behavior": "useSystemPicker only applies on macOS. On Windows the handler callback always runs with {video: sources[0], audio:'loopback'} (WASAPI loopback). It has no .catch and no empty-sources check"
+        },
+        {
+            "location": "forge.config.js:44 / 48 (and squirrel maker 32-41)",
+            "condition": "makers platforms ['darwin'] / ['linux']; squirrel unfiltered",
+            "behavior": "DMG for macOS, AppImage for Linux, Squirrel .exe for Windows. extraResource SystemAudioDump (macOS binary) is bundled on every platform"
+        }
+    ]
+}

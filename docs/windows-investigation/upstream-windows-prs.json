@@ -1,0 +1,355 @@
+{
+    "summary": "I went through all 116 sohzm/cheating-daddy PRs (list in /tmp/cdwin-WinPRs/prs.json, diffs in diffN.patch) and searched upstream/master and upstream/v05 history for Windows-related commits. The fork already has every merged upstream PR except #385. The only upstream-only Windows-related window change, 3cccc36, is matched in the fork. So the gaps are fixes from unmerged PRs and one upstream dependency cleanup (800df4d).\n\n1. Strongest candidate for 'does not work at all' (from source or when building on Windows): the fork added uiohook-napi in 17e6740, and its forge.config.js:30 still has `rebuildConfig: {}`. electron-forge start/package (start.js:60) runs @electron/rebuild. That rebuild only accepts prebuilds named node.napi.node or electron.napi.node (prebuildify.js:47-58). uiohook-napi ships prebuilds/win32-x64/uiohook-napi.node, so the lookup fails and the module is compiled from source with node-gyp. This happened on this Mac too: node_modules/uiohook-napi/build/Release/.forge-meta exists, and build/config.gypi shows runtime=electron, target=44.3.0. On Windows that build needs Visual Studio C++ build tools plus Python, and @electron/node-gyp resolved over git+ssh. Open PR #474 fixes exactly this with `rebuildConfig: { onlyModules: [] }`. The fork does not have it.\n\n2. The screen-capture request handler in window.js:149-156 has no .catch and no empty-sources check, and passes `useSystemPicker: true`. Electron documents that option as macOS 15+ only, so on Windows this handler is always the path that runs. It is also only reached on Windows, because the fork never calls getDisplayMedia on macOS (renderer.js:703-717). Unmerged PRs #431, #298 and #279 fixed it; the fork has none of them.\n\n3. Local-AI mode still uses Whisper `device: 'auto'` (localai.js:184). PRs #298, #315 and #434 report a native ONNX/DirectML crash on Windows with that setting and switched to CPU. The fork does not have this.\n\nThe Gemini model/config PRs (#385, #392, #455, #458, #470, #479) mostly do not apply anymore: the fork's own changes replaced them (gemini-3.8-live, gemini-3.8-flash, googleSearch off by default). They cannot explain a Windows-only failure; one leftover, gemma-3-27b-it, is noted below.",
+    "changes": [
+        {
+            "ref": "PR #15 (b1f17c5)",
+            "title": "Fix: Ctrl+\\ shortcut now correctly toggles window visibility",
+            "url": "https://github.com/sohzm/cheating-daddy/pull/15",
+            "merged": true,
+            "windowsProblemFixed": "On Windows/Linux, Ctrl+\\ closed the window instead of toggling it.",
+            "fixSummary": "globalShortcut Ctrl+\\ now runs hide/show instead of close.",
+            "presentInFork": "superseded",
+            "evidence": "b1f17c5 is an ancestor of master. The fork now defaults Windows toggleVisibility to 'Alt' (overlayVisibility.js:23-25, window.js:256) and still registers Ctrl+\\ as a fallback on win32 (window.js:328-331)."
+        },
+        {
+            "ref": "PR #28 (787cc44)",
+            "title": "Fix window movement shortcuts to only work when visible",
+            "url": "https://github.com/sohzm/cheating-daddy/pull/28",
+            "merged": true,
+            "windowsProblemFixed": "Ctrl+arrow move shortcuts moved the hidden window (all platforms).",
+            "fixSummary": "Return early if !mainWindow.isVisible().",
+            "presentInFork": "yes",
+            "evidence": "git merge-base --is-ancestor 787cc44 master: true"
+        },
+        {
+            "ref": "PR #33 (54fb15e)",
+            "title": "add click-through toggle functionality",
+            "url": "https://github.com/sohzm/cheating-daddy/pull/33",
+            "merged": true,
+            "windowsProblemFixed": "Click-through toggle (Ctrl+M on Windows).",
+            "fixSummary": "setIgnoreMouseEvents toggle shortcut.",
+            "presentInFork": "yes",
+            "evidence": "Ancestor of master; window.js:257 toggleClickThrough 'Ctrl+M' on non-mac."
+        },
+        {
+            "ref": "PR #70 (19c9c16)",
+            "title": "feat: random process name",
+            "url": "https://github.com/sohzm/cheating-daddy/pull/70",
+            "merged": true,
+            "windowsProblemFixed": "Hides the window from the Windows taskbar and Alt-Tab (setSkipTaskbar) and adds stealth content protection.",
+            "fixSummary": "setSkipTaskbar(true) on win32 plus setContentProtection.",
+            "presentInFork": "yes",
+            "evidence": "Ancestor of master; fork window.js:134 skipTaskbar: isWin, window.js:170-177 setAlwaysOnTop screen-saver, setContentProtection, setSkipTaskbar on win32."
+        },
+        {
+            "ref": "PR #67 (a0222c8)",
+            "title": "linux appimage build and audio fix",
+            "url": "https://github.com/sohzm/cheating-daddy/pull/67",
+            "merged": true,
+            "windowsProblemFixed": "None (Linux only); listed because it matched the audio grep.",
+            "fixSummary": "Linux getDisplayMedia audio attempt with a screen-only fallback; AppImage maker.",
+            "presentInFork": "yes",
+            "evidence": "Ancestor of master; renderer.js:261-323 Linux branch."
+        },
+        {
+            "ref": "PR #73, #85, #100, #12, #16, #56, #202 (merged)",
+            "title": "stealth toggle / electron bump to ^30.0.5 / e2e tests / disconnect fix / image token fix / streaming / groq",
+            "url": "https://github.com/sohzm/cheating-daddy/pull/85",
+            "merged": true,
+            "windowsProblemFixed": "Nothing Windows-specific. #85 bumped Electron 30.0.0 to ^30.0.5.",
+            "fixSummary": "General fixes.",
+            "presentInFork": "yes",
+            "evidence": "All merge commits are ancestors of master (a949f5a, 0865118, 44aef5c, b565a9b, 6391dc0, 233b486, b71352c). Electron has since been bumped to 44.3.0, so #85 is superseded."
+        },
+        {
+            "ref": "PR #385 (998a056)",
+            "title": "Fix deprecated Gemini/Gemma model names",
+            "url": "https://github.com/sohzm/cheating-daddy/pull/385",
+            "merged": true,
+            "windowsProblemFixed": "Not Windows-specific: 404s on retired gemma-3-27b-it and the old Live model (issues #339, #452).",
+            "fixSummary": "gemma-3-27b-it -> gemma-4-26b-a4b-it; Live model -> gemini-3.1-flash-live-preview.",
+            "presentInFork": "partial",
+            "evidence": "998a056 is NOT an ancestor of master. The Live model is superseded (gemini.js:66 'gemini-3.8-live'), but gemma-3-27b-it is still used at gemini.js:933 and 954 (sendToGemma, reached from dispatchTranscription at gemini.js:983-987 when there is no Groq key) and storage.js:315,335."
+        },
+        {
+            "ref": "commit 800df4d (upstream-only, 'yay')",
+            "title": "Drop @huggingface/transformers and ollama; asar: true; native-ai-runtime downloads whisper/llama server binaries per platform",
+            "url": "https://github.com/sohzm/cheating-daddy/commit/800df4d",
+            "merged": true,
+            "windowsProblemFixed": "Removes the heavy native deps (onnxruntime-node postinstall download, sharp) that make install fragile on Windows. Adds a win32 entry in BINARY_RELEASES for local AI.",
+            "fixSummary": "package.json drops @huggingface/transformers and ollama; forge asar unpack list removed; localai rewritten on native-ai-runtime.js.",
+            "presentInFork": "no",
+            "evidence": "Fork package.json:35-39 still has @huggingface/transformers ^3.8.1, ollama, and also uiohook-napi. forge.config.js:7 unpacks onnxruntime-node, sharp, @img, uiohook-napi. localai.js:177 imports @huggingface/transformers lazily."
+        },
+        {
+            "ref": "commit 3cccc36 (upstream-only)",
+            "title": "fix: refine window behavior",
+            "url": "https://github.com/sohzm/cheating-daddy/commit/3cccc36",
+            "merged": true,
+            "windowsProblemFixed": "None new. Windows keeps alwaysOnTop, visibleOnAllWorkspaces and the screen-saver level; macOS gets them only in live view.",
+            "fixSummary": "alwaysOnTop: process.platform==='win32'; per-view toggling only on non-win32.",
+            "presentInFork": "superseded",
+            "evidence": "The fork already sets these on win32: window.js:133 alwaysOnTop true, :159 setVisibleOnAllWorkspaces, :171 setAlwaysOnTop(true,'screen-saver',1). Upstream still uses transparent:true on Windows (git show upstream/master:src/utils/window.js line 21). The fork's opaque-Windows fix (79d63b2) has no upstream equivalent."
+        },
+        {
+            "ref": "commits cdedc66, 23c8a84, c85ff3e, 452cf2d (upstream-only)",
+            "title": "cleanup / uwu / version bump",
+            "merged": true,
+            "windowsProblemFixed": "None. The only Windows-related hunk is the removal of the FeedbackView OS label.",
+            "presentInFork": "unknown",
+            "evidence": "Not applicable: no Windows fix to port. git show <sha> | grep win32|Windows|loopback|getDisplayMedia|platform: only cdedc66 FeedbackView navigator.platform lines.",
+            "fixSummary": "n/a"
+        },
+        {
+            "ref": "PR #474 (open)",
+            "title": "fix: restore screen analysis, render LaTeX, and add mouse hotkeys",
+            "url": "https://github.com/sohzm/cheating-daddy/pull/474",
+            "merged": false,
+            "windowsProblemFixed": "(a) electron-forge rebuild of uiohook-napi 'breaks on machines without a supported MSVC toolset' (Windows); (b) Analyze Screen 404 on gemini-2.5-flash. Author validated with 'npm run make' and launched the packaged Windows x64 app.",
+            "fixSummary": "forge.config.js rebuildConfig: { onlyModules: [] } so no native module is rebuilt and uiohook-napi's N-API prebuild is used as-is; uiohook-napi kept in asar unpack; screen model -> gemini-3.6-flash with a lite fallback.",
+            "presentInFork": "partial",
+            "evidence": "Fork forge.config.js:30 'rebuildConfig: {}' (rebuild fix absent). The screen model part is superseded (gemini.js:477 CODE_ANSWER_MODEL 'gemini-3.8-flash'; analyzeScreenSend.test.js:67). The asar unpack for uiohook-napi is present (forge.config.js:7)."
+        },
+        {
+            "ref": "PR #298 (closed, unmerged)",
+            "title": "fix: Windows local AI mode - screen capture, Whisper crash & noise filtering",
+            "url": "https://github.com/sohzm/cheating-daddy/pull/298",
+            "merged": false,
+            "windowsProblemFixed": "Tested on Win11 multi-GPU. (1) Whisper device:'auto' -> native ONNX/DirectML crash kills Electron. (2) getDisplayMedia fails on multi-GPU DXGI. (3) Handler never called back when there are no sources. (4) Mic not started in local mode.",
+            "fixSummary": "localai device:'cpu'; setDisplayMediaRequestHandler checks sources.length and adds .catch(()=>callback({})), useSystemPicker:false; renderer falls back to desktopCapturer+getUserMedia(chromeMediaSourceId); app.commandLine.appendSwitch('disable-gpu-sandbox') on win32; always init mic on Windows; filter [BLANK_AUDIO].",
+            "presentInFork": "partial",
+            "evidence": "Missing: localai.js:184 device:'auto'; window.js:149-156 has no catch, no empty check, useSystemPicker:true; index.js:17-19 only disables CalculateNativeWinOcclusion (no disable-gpu-sandbox). Equivalent: the screenshot fallback, because Analyze Screen uses main-process desktopCapturer (screenStill.js:109-116, gemini.js:1959-1963)."
+        },
+        {
+            "ref": "PR #315 (closed) / PR #434 (closed)",
+            "title": "platform-aware Whisper device / fix(local-ai): stabilize Whisper model loading",
+            "url": "https://github.com/sohzm/cheating-daddy/pull/434",
+            "merged": false,
+            "windowsProblemFixed": "Whisper 'auto' picks DirectML on Windows and crashes or behaves unstably in local mode (see issue #239, local mode crash on Windows).",
+            "fixSummary": "#315: device: isWindows ? 'cpu' : 'auto'. #434: CPU default, DirectML only as an explicit opt-in on win32, cache-corruption retry.",
+            "presentInFork": "no",
+            "evidence": "localai.js:183-184 dtype 'q8', device 'auto'."
+        },
+        {
+            "ref": "PR #431 (closed) / PR #279 (closed)",
+            "title": "fix(capture): support selecting a display / Add capture display selection setting",
+            "url": "https://github.com/sohzm/cheating-daddy/pull/431",
+            "merged": false,
+            "windowsProblemFixed": "Handler threw or hung when desktopCapturer returned no sources or rejected (unhandled rejection); sources[0] was always the first display. #279 also set useSystemPicker:false.",
+            "fixSummary": "selectCaptureSource() by display_id; callback({}) on empty sources; .catch -> callback({}); handler registered without useSystemPicker.",
+            "presentInFork": "no",
+            "evidence": "window.js:149-156 'desktopCapturer.getSources({ types: [\"screen\"] }).then(sources => { callback({ video: sources[0], audio: \"loopback\" }); });' with { useSystemPicker: true }."
+        },
+        {
+            "ref": "PR #186 (closed)",
+            "title": "fix: Restore Gemini Live API integration after Google model deprecation",
+            "url": "https://github.com/sohzm/cheating-daddy/pull/186",
+            "merged": false,
+            "windowsProblemFixed": "'Improved Windows system-audio capture with reliable fallbacks': loopback with echoCancellation/noiseSuppression/AGC disabled; detect missing audio track; screen-only retry; mic automatically used when there is no system audio.",
+            "fixSummary": "renderer Windows branch: try/catch getDisplayMedia, check getAudioTracks().length, fall back to the mic when !hasSystemAudio, status warnings.",
+            "presentInFork": "partial",
+            "evidence": "Present: renderer.js:633-643 getLoopbackStream uses echoCancellation:false, noiseSuppression:false, autoGainControl:false; :709-717 catches errors and checks the audio track count. Missing: automatic mic fallback; the mic is only requested when audioMode !== 'speaker_only' (renderer.js:719)."
+        },
+        {
+            "ref": "PR #212 (closed) / PR #164 (closed, 'fix for issue #161')",
+            "title": "Microphone device selection and permission handling / mic+speaker device selection",
+            "url": "https://github.com/sohzm/cheating-daddy/pull/212",
+            "merged": false,
+            "windowsProblemFixed": "Issue #161 'Windows: Application does not detect audio'; some headsets (G733) were never granted. #212 requests the mic first on Windows so the permission prompt appears, with a screen-only retry.",
+            "fixSummary": "Saved audioInputDeviceId passed as deviceId to getUserMedia; Windows order mic-then-display; screen-only fallback.",
+            "presentInFork": "no",
+            "evidence": "renderer.js:620-631 getMicrophoneStream has no deviceId; no device selection in storage.js or CustomizeView. The screen-only retry is moot because screenshots do not depend on getDisplayMedia (screenStill.js)."
+        },
+        {
+            "ref": "PR #290 (closed)",
+            "title": "Friendly settee",
+            "url": "https://github.com/sohzm/cheating-daddy/pull/290",
+            "merged": false,
+            "windowsProblemFixed": "Windows loopback track validation, mic error surfacing, Windows window controls.",
+            "fixSummary": "audio:false for mic_only; throw if no loopback track; echoCancellation false.",
+            "presentInFork": "partial",
+            "evidence": "Fork checks the loopback audio track (renderer.js:712-713) and skips the loopback for mic_only (renderer.js:709)."
+        },
+        {
+            "ref": "PR #96, #97 (closed)",
+            "title": "audio/stealth enhancements; security hardening incl. externalized AudioWorklet",
+            "url": "https://github.com/sohzm/cheating-daddy/pull/97",
+            "merged": false,
+            "windowsProblemFixed": "Windows loopback buffering via ScriptProcessor; CSP issue with an inline AudioWorklet.",
+            "fixSummary": "AudioWorklet file plus Windows mic capture.",
+            "presentInFork": "superseded",
+            "evidence": "Fork uses src/audio-worklet.js loaded via new URL('./audio-worklet.js', window.location.href) (renderer.js:652), shared for loopback and mic (renderer.js:650-689)."
+        },
+        {
+            "ref": "PR #482 (open)",
+            "title": "feat: Linux system audio capture via PipeWire",
+            "url": "https://github.com/sohzm/cheating-daddy/pull/482",
+            "merged": false,
+            "windowsProblemFixed": "None for Windows. It makes audio:'loopback' Windows-only (`process.platform === 'win32' && request.audioRequested`).",
+            "fixSummary": "Platform-aware handler plus pw-record capture for Linux.",
+            "presentInFork": "unknown",
+            "evidence": "Not applicable to Windows: Windows already receives 'loopback' in the fork (window.js:152); the Linux part is absent."
+        },
+        {
+            "ref": "PR #392 (closed) / PR #479 (open)",
+            "title": "Free-tier Live quota crash with googleSearch / unusable on new Gemini keys (2.5 models, proactivity, googleSearch)",
+            "url": "https://github.com/sohzm/cheating-daddy/pull/479",
+            "merged": false,
+            "windowsProblemFixed": "Not Windows-specific: the Live session closes right after open (googleSearch shows up as a quota error; proactivity is rejected), and 2.5 models 404 for new keys.",
+            "fixSummary": "Drop googleSearch/proactivity; swap gemini-2.5-flash(-lite) for 3.x.",
+            "presentInFork": "superseded",
+            "evidence": "storage.js:30 googleSearchEnabled:false; gemini.js:643-647 adds googleSearch only when enabled; Live model gemini-3.8-live (gemini.js:66); the leftover storage.js:391-402 getAvailableModel is unused (grep finds no callers). Works on Mac with the same code."
+        },
+        {
+            "ref": "PR #455, #458, #470, #453, #384, #370, #169, #127, #81 (closed/open)",
+            "title": "Various model-name / 404 fixes",
+            "merged": false,
+            "windowsProblemFixed": "Not Windows-specific (model deprecations).",
+            "fixSummary": "Model renames.",
+            "presentInFork": "superseded",
+            "evidence": "Fork uses gemini-3.8-live / gemini-3.8-flash / gemini-3.1-flash-lite (gemini.js:66, 409, 477).",
+            "url": "https://github.com/sohzm/cheating-daddy/pull/458"
+        },
+        {
+            "ref": "PR #480 (open)",
+            "title": "Implement window management, shortcuts, and rebrand to Devil AI",
+            "url": "https://github.com/sohzm/cheating-daddy/pull/480",
+            "merged": false,
+            "windowsProblemFixed": "Keeping the overlay topmost against Safe Exam Browser on Windows (a PowerShell SetWindowPos HWND_TOPMOST loop); PageDown via keybd_event.",
+            "fixSummary": "Native Win32 topmost enforcer.",
+            "presentInFork": "no",
+            "evidence": "No equivalent in window.js. Only needed against apps that fight for HWND_TOPMOST, so not a cause of 'not working at all'."
+        },
+        {
+            "ref": "PR #191, #169 (closed)",
+            "title": "Windows Squirrel CI workflows",
+            "url": "https://github.com/sohzm/cheating-daddy/pull/191",
+            "merged": false,
+            "windowsProblemFixed": "Building the .exe on a windows runner (out/make/squirrel.windows/x64/*.exe).",
+            "fixSummary": "GitHub Actions workflow running electron-forge make on windows-latest.",
+            "presentInFork": "no",
+            "evidence": "Neither upstream/master nor the fork has a .github/workflows directory (git ls-tree upstream/master | grep workflow: empty; ls .github/workflows: none)."
+        },
+        {
+            "ref": "PR #407, #209, #210, #115, #133, #483 (closed/open)",
+            "title": "Analyze Screen shortcut, focus input, unbind shortcuts, Ctrl+G restart, click-through opacity, config-reset data loss",
+            "merged": false,
+            "windowsProblemFixed": "None Windows-specific. #483 fixes config-upgrade rmSync data loss and case-sensitive 'Error' status matching on all platforms.",
+            "presentInFork": "no",
+            "evidence": "storage.js:151-173 still has needsReset() and fs.rmSync(configDir) (platform-agnostic).",
+            "url": "https://github.com/sohzm/cheating-daddy/pull/483",
+            "fixSummary": "n/a for Windows"
+        }
+    ],
+    "findings": [
+        {
+            "title": "electron-forge rebuilds uiohook-napi from source, which needs MSVC, Python and git+ssh access to @electron/node-gyp on Windows",
+            "stage": "install",
+            "severity": "blocker",
+            "confidence": "likely",
+            "evidence": [
+                "forge.config.js:30 `rebuildConfig: {},` @8c49d85; package.json:39 'uiohook-napi': '^1.5.5' (added in 17e6740)",
+                "node_modules/@electron-forge/core/dist/api/start.js:60 calls listrCompatibleRebuildHook(..., forgeConfig.rebuildConfig) on `npm start`; package/make rebuild the same way",
+                "node_modules/@electron/rebuild/lib/module-type/prebuildify.js:47-58 only accepts prebuilds/<plat>-<arch>/electron.napi.node | node.napi.node | electron.abiN.node; uiohook-napi ships prebuilds/win32-x64/uiohook-napi.node, so the lookup fails and the module is built with node-gyp (module-rebuilder.js:140-145)",
+                "On this Mac the rebuild actually ran: node_modules/uiohook-napi/build/Release/.forge-meta exists, and build/config.gypi has runtime 'electron', target '44.3.0', nodedir ~/.electron-gyp/44.3.0",
+                "package-lock.json:695 @electron/node-gyp resolved as git+ssh://git@github.com/electron/node-gyp.git#06b29aa...",
+                "Upstream open PR #474 forge.config.js: `rebuildConfig: { onlyModules: [] }` with the comment 'Rebuilding it is unnecessary and breaks on machines without a supported MSVC toolset'; the author then launched the packaged Windows x64 app. https://github.com/sohzm/cheating-daddy/pull/474",
+                "module-walker.js:113 + rebuild.js:80: a non-null onlyModules array filters out every module, so [] rebuilds nothing"
+            ],
+            "explanation": "On macOS, Xcode command-line tools compile libuiohook silently, so `npm start` works. On a typical Windows machine, `npm install` (uiohook-napi install script `node-gyp-build` finds the prebuild, OK) is followed by `npm start`, and electron-forge then runs @electron/rebuild. That step ignores the prebuild because of its file name and invokes @electron/node-gyp. Without Visual Studio Build Tools (Desktop C++ workload) and Python, it fails with a gyp error and the app never opens. Before that, npm also has to fetch @electron/node-gyp over git+ssh, which fails without a GitHub SSH key or git on PATH. Upstream master avoids all of this because it has no native dependencies after 800df4d. The same rebuild runs during `electron-forge make` for the Squirrel .exe. [INFERENCE] The exact error on the user's Windows machine was not observed.",
+            "fix": "Set `rebuildConfig: { onlyModules: [] }` in forge.config.js (as in upstream PR #474), or `ignoreModules: ['uiohook-napi']`. Keep uiohook-napi in the asar unpack list. Optionally make the lockfile resolve @electron/node-gyp via https or a registry tarball. Build the Windows .exe on Windows or a windows-latest CI runner.",
+            "presentInFork": "no"
+        },
+        {
+            "title": "Screen-capture request handler has no error or empty-source handling, so Windows getDisplayMedia can hang and leave the session stuck in 'starting'",
+            "stage": "session-start",
+            "severity": "major",
+            "confidence": "possible",
+            "evidence": [
+                "src/utils/window.js:149-156 @8c49d85: `desktopCapturer.getSources({ types: ['screen'] }).then(sources => { callback({ video: sources[0], audio: 'loopback' }); });` with no .catch and no sources.length check, options { useSystemPicker: true }",
+                "Electron docs (session.md setDisplayMediaRequestHandler): useSystemPicker is '_macOS_ _Experimental_ … currently available for MacOS 15+ only. If the system picker is available … the handler will not be invoked'; 'loopback … currently only supported on Windows'. https://github.com/electron/electron/blob/main/docs/api/session.md",
+                "Electron issue #45517 (Windows 11): sources[0] undefined -> 'TypeError: video must be a WebFrameMain or DesktopCapturerSource'; a comment reports the share then hangs if the handler throws. https://github.com/electron/electron/issues/45517",
+                "renderer.js:703-717: macOS never calls getDisplayMedia (it uses SystemAudioDump); non-mac calls getLoopbackStream -> getDisplayMedia",
+                "sessionController.js:43 `await this.operations.startCapture(...)` has no timeout",
+                "Unmerged fixes: PR #431 (catch + callback({})), #298 (empty check + catch + useSystemPicker:false), #279 (useSystemPicker:false)"
+            ],
+            "explanation": "On Windows, the handler is the only path for system audio and it is never exercised on the Mac. If desktopCapturer.getSources rejects (reported for multi-GPU / DXGI setups in PR #298) or returns [], the callback is never called or throws inside .then. In the hang case, navigator.mediaDevices.getDisplayMedia in getLoopbackStream never settles, startCapture never returns, and SessionController stays in 'starting': no audio, no 'Listening'. When getSources does succeed, the code works.",
+            "fix": "Wrap it as in PR #431: `.then(sources => sources.length ? callback({ video: sources[0], audio: 'loopback' }) : callback(null)).catch(() => callback(null))`. Drop `{ useSystemPicker: true }` or gate it on darwin. Optionally add a timeout around getLoopbackStream so the session still starts with 'Audio unavailable'.",
+            "presentInFork": "no"
+        },
+        {
+            "title": "Local AI mode: Whisper device 'auto' can natively crash Electron on Windows (DirectML)",
+            "stage": "session-start",
+            "severity": "major",
+            "confidence": "likely",
+            "evidence": [
+                "src/utils/localai.js:183-184 @8c49d85: `dtype: 'q8', device: 'auto'`",
+                "PR #298 body: \"device: 'auto' in loadWhisperPipeline caused ONNX Runtime to attempt DirectML/GPU acceleration on Windows. This is a native crash — it kills the whole process\" https://github.com/sohzm/cheating-daddy/pull/298",
+                "PR #315 diff: `device: isWindows ? 'cpu' : 'auto'`; PR #434: 'default Whisper to the stable CPU backend instead of automatic DirectML selection'",
+                "Upstream issue #239 'local mode crash Windows'"
+            ],
+            "explanation": "On macOS, onnxruntime-node 'auto' picks the CPU (or CoreML) provider. On Windows it tries DirectML, and three independent PR authors report a native crash. This only applies if the user selects local mode; BYOK Gemini does not touch localai.js (it is lazy-loaded at gemini.js:38-41).",
+            "fix": "Use `device: process.platform === 'win32' ? 'cpu' : 'auto'` (or always 'cpu', as in #434).",
+            "presentInFork": "no"
+        },
+        {
+            "title": "No automatic microphone fallback when Windows loopback yields no audio track",
+            "stage": "audio-capture",
+            "severity": "minor",
+            "confidence": "possible",
+            "evidence": [
+                "renderer.js:709-717: a loopback failure only adds a warning; renderer.js:719 requests the mic only when audioMode !== 'speaker_only'",
+                "renderer.js:734-736: with no inputs, status 'Audio unavailable — text and Analyze Screen still work'",
+                "PR #186 renderer diff: `if (audioMode === 'mic_only' || audioMode === 'both' || !hasSystemAudio)` falls back to the mic"
+            ],
+            "explanation": "In the default speaker_only mode, if Windows loopback fails (driver, exclusive-mode device, or the handler issue above), nothing is captured and Gemini never hears a question. On macOS, SystemAudioDump does the capture, so this path is never hit there.",
+            "fix": "Fall back to getMicrophoneStream when the loopback has no audio track, and show the reason in the status bar.",
+            "presentInFork": "partial"
+        },
+        {
+            "title": "No GPU-sandbox / multi-GPU mitigation for Windows desktop capture",
+            "stage": "screen-capture",
+            "severity": "minor",
+            "confidence": "possible",
+            "evidence": [
+                "PR #298: 'Added disable-gpu-sandbox flag on Windows to help with GPU sandbox issues' for DXGI adapter enumeration failures",
+                "src/index.js:17-19 @8c49d85: only `disable-features=CalculateNativeWinOcclusion` on win32"
+            ],
+            "explanation": "On hybrid-GPU laptops, desktopCapturer/getDisplayMedia can fail during DXGI enumeration. This affects both Analyze Screen (screenStill.js uses desktopCapturer) and loopback start. It cannot happen on macOS.",
+            "fix": "Add app.commandLine.appendSwitch('disable-gpu-sandbox') on win32 only if logs show DXGI or getSources failures. Do not add it pre-emptively.",
+            "presentInFork": "no"
+        },
+        {
+            "title": "Fork still ships transformers/onnxruntime-node/sharp, which upstream removed in 800df4d",
+            "stage": "install",
+            "severity": "minor",
+            "confidence": "possible",
+            "evidence": [
+                "package.json:36 '@huggingface/transformers': '^3.8.1' (pulls onnxruntime-node with postinstall `node ./script/install`, and sharp with install `node install/check.js || npm run build`)",
+                "forge.config.js:7 asar unpack list includes onnxruntime-node, sharp, @img",
+                "upstream 800df4d removes @huggingface/transformers and ollama and switches to asar: true"
+            ],
+            "explanation": "Neither module is loaded at startup (localai.js:177 is a lazy import), so they do not stop BYOK from launching. But their install scripts are network/native steps that can fail on Windows. Under npm 11 allowScripts they are skipped, which breaks local mode.",
+            "fix": "Drop @huggingface/transformers if local mode is not needed, or port upstream's native-ai-runtime.js.",
+            "presentInFork": "no"
+        },
+        {
+            "title": "Retired gemma-3-27b-it still used for the Gemma transcription fallback",
+            "stage": "answers-display",
+            "severity": "minor",
+            "confidence": "possible",
+            "evidence": [
+                "gemini.js:933 model 'gemma-3-27b-it', :954; dispatchTranscription gemini.js:983-987 uses Gemma when there is no Groq key",
+                "PR #385 (merged upstream 998a056, not an ancestor of master) renames it to gemma-4-26b-a4b-it; issue #339 404 gemma model"
+            ],
+            "explanation": "Not Windows-specific. It only matters on the Groq/Gemma text path, not in the gemini-3.8-live BYOK flow that works on the Mac.",
+            "fix": "Rename it to gemma-4-26b-a4b-it as in #385 (gemini.js and storage.js:315,335).",
+            "presentInFork": "partial"
+        }
+    ],
+    "openQuestions": [
+        "What is the exact Windows symptom, and how does the user run it: `npm start` from source on Windows, or an .exe? If the .exe was made on the Mac with `--platform win32`, the uiohook-napi rebuild and the Squirrel maker (needs Wine/Mono) would also fail. Not verified.",
+        "Does the Windows machine have Visual Studio Build Tools (C++ workload), Python, and git with a GitHub SSH key? Without them, the rebuild described in finding 1 fails.",
+        "In speaker_only mode on the Mac, system audio comes from SystemAudioDump (gemini.js:1554-1571). The renderer AudioWorklet -> 'send-audio-frame' path (renderer.js:650-689, gemini.js:1882-1890) is only used for the Mac mic. The Windows loopback stream at 48 kHz going into AudioContext({sampleRate: 16000|24000}) may therefore never have been tested on any machine. [INFERENCE] Worth a check by the audio-capture investigator."
+    ]
+}

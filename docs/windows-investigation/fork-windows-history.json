@@ -1,0 +1,273 @@
+{
+    "summary": "I traced the fork's Windows work in git history and docs. All four Windows fix commits (1a26363, 79d63b2, 133406a, 309fadf) are on origin/windows-compatible-cheatingdaddy (0cb8874) and are still unchanged on master. Every later edit to the Windows-relevant files was made inside 309fadf itself. The two commits after the branch (9043400, 8c49d85) and the uncommitted diff only change gemini.js turn/answer logic, the Gemini model names, prompt text, the answer CSS and markdown highlighting in AssistantView, and new helper modules required from main. They make no change to the window, index.html, index.js, renderer.js, the shortcuts, package.json or forge.config, so if the user last tested Windows on the branch, master adds no Windows-specific startup, window or capture regression. 133406a's renderer path fix still covers every module the renderer loads at startup. I ran Module.createRequire(src/index.html), which resolves ./utils/overlayVisibility, ./utils/answerEvents, ./utils/sessionController and ./utils/visibleAnswerRange to src/utils/*.js, and all four load; none of them require anything relative. The bug 133406a fixed was introduced 9 minutes earlier by 79d63b2 (require('./overlayVisibility') from a <script src> page). It would have failed on every platform, not only Windows. The more important result: none of the Windows work has ever run on Windows. Both docs say Windows visibility, capture and readiness are 'unverified'. tests/windows-smoke.spec.js is skipped off win32, and the repo has no CI. Also, the macOS success does not exercise the Windows audio path. On macOS in speaker_only mode, audio comes from SystemAudioDump. On Windows it always goes through getDisplayMedia loopback, then the AudioWorklet, then 'send-audio-frame' (renderer.js:703-731). 9043400 also removed the client audioStreamEnd and added a noise gap-filler that only starts in startMacOSAudioCapture. After that change Windows relies on server VAD over the worklet's frames, which are all zeros during silence. The audit's open item still applies: the display-media handler has no rejection or empty-source handling.",
+    "windowsFixes": [
+        {
+            "sha": "1a26363",
+            "problem": "The transparent always-on-top overlay failed to paint or restore on Windows, and hide/show still used Ctrl+\\.",
+            "fix": "Moved setContentProtection to a per-platform path. Added Menu.setApplicationMenu(null), skipTaskbar and roundedCorners:false on win32. Restore on win32 uses show()+setAlwaysOnTop('screen-saver')+moveTop instead of showInactive (overlayVisibility.getOverlayRestoreMethod). The default toggleVisibility on win32 became 'Alt' via the uiohook tap monitor, with Ctrl+\\ registered as a globalShortcut fallback, and saved 'Ctrl+\\' keybinds are migrated. Windows are positioned in the workArea through getTopCenteredBounds/setWindowFrame. It also added 'enable-transparent-visuals', a 100 ms delayed start and a ready-to-show reveal; 79d63b2 removed those.",
+            "statusOnMaster": "intact",
+            "evidence": "`git diff 1a26363 master -- src/utils/overlayVisibility.js src/utils/optionTapMonitor.js` only shows the helpers 79d63b2 added. On master: window.js:45-55 restoreOverlayWindow with show/moveTop, window.js:116-122 Menu null, window.js:134-136 skipTaskbar/roundedCorners/autoHideMenuBar, window.js:236-239 mergeKeybinds migration, window.js:256 getDefaultToggleVisibility, window.js:315 canRegisterGlobalShortcut, window.js:333 'Registered fallback toggleVisibility: Ctrl+\\', index.js:18 disable-features=CalculateNativeWinOcclusion. Status 'intact' means the final shape after 79d63b2 and 309fadf; nothing after 309fadf touches it."
+        },
+        {
+            "sha": "79d63b2",
+            "problem": "Transparent Electron windows still did not show on Windows (DWM), so the window was blank or invisible.",
+            "fix": "On win32 the window is opaque and shown at creation: transparent:false (shouldUseTransparentOverlay), backgroundColor '#0a0a0a', show:true (shouldShowWindowOnCreate). The renderer adds html.windows-opaque (CSS in index.html), and resolveBackgroundAlpha forces theme alpha 1. The Alt hook starts on did-finish-load. It removed 'enable-transparent-visuals' and the 100 ms start delay. It also added a renderer require('./overlayVisibility') with the wrong relative path; 133406a fixed it.",
+            "statusOnMaster": "intact",
+            "evidence": "window.js:129-131,145 (show/transparent/backgroundColor helpers); window.js:170-184 (win32 setAlwaysOnTop, setContentProtection, setSkipTaskbar, show, moveTop); window.js:202-203 did-finish-load → startHideShortcut; index.html:153-154 html.windows-opaque; renderer.js:32-36 adds windows-opaque. `git diff 1a26363 master -- src/utils/overlayVisibility.js` shows the four 79d63b2 helpers unchanged."
+        },
+        {
+            "sha": "133406a",
+            "problem": "79d63b2 made renderer.js call require('./overlayVisibility'). renderer.js is loaded through <script src> from src/index.html with nodeIntegration, so the relative require resolves from src/ and throws. renderer.js then aborts, window.cheatingDaddy is never defined and the UI does not boot. This would fail on every OS; it was noticed on Windows.",
+            "fix": "Changed it to require('./utils/overlayVisibility') with a comment explaining the resolution base, plus a source-text test.",
+            "statusOnMaster": "intact",
+            "evidence": "renderer.js:30-32 on master; overlayVisibility.test.js:94-98. Mac check: Module.createRequire(path.resolve('src/index.html')) resolves and loads ./utils/overlayVisibility, ./utils/answerEvents (CheatingDaddyApp.js:612), ./utils/sessionController (CheatingDaddyApp.js:699) and ./utils/visibleAnswerRange (AssistantView.js:894), all to src/utils/*.js. Resolving from the src/utils directory fails, as expected. No other relative require or window.require exists in renderer.js or src/components, and the four modules have no require() calls of their own. The worklet loads with new URL('./audio-worklet.js', location.href) (renderer.js:652), which resolves to src/audio-worklet.js and exists."
+        },
+        {
+            "sha": "309fadf",
+            "problem": "The audit (docs/plans/2026-09-09-windows-performance-audit.md) found: no did-fail-load/crash/unresponsive recovery, an unclamped 1100x800 window, no way back with skipTaskbar, mic stream/AudioContext leaks, mic_only being ignored on Windows, ScriptProcessor bursts of about 171 ms, GoAway reconnect duplication, quadratic history IPC, unbounded DOM, and old Electron 30.5.1.",
+            "fix": "index.js adds a renderer-ready handshake with a 10 s show() fallback, did-fail-load/render-process-gone/unresponsive recovery through recoverFromRendererFailure, a Tray (logo.ico on win32) with Show/Stop/Quit, and diagnostics. window.js adds clampBoundsToWorkArea and keepWindowOnScreen on display-removed/metrics-changed, single-registration IPC with windowIpcContext, and closed-cleanup. renderer.js replaces capture with startCapture: getLoopbackStream/getMicrophoneStream into one AudioWorklet (src/audio-worklet.js), 40 ms frames over 'send-audio-frame', validateAudioFrame and routeAudioFrame in main, and mic_only honored (renderer.js:709). Also SessionController, ConnectionGeneration, the JSONL HistoryStore, Electron 44.3.0, Forge 7.11.2, node-abi override and the @img/sharp-win32-x64 optional dependency.",
+            "statusOnMaster": "intact",
+            "evidence": "`git diff 0cb8874 master --stat` touches none of src/index.js, src/utils/window.js, src/utils/renderer.js, src/index.html, src/audio-worklet.js, src/utils/audioPipeline.js, package.json or forge.config.js. Master index.js:33-100 (tray/recovery/handshake), window.js:79-96,221-229,457-497, renderer.js:620-783, renderer.js:1160 ipcRenderer.send('renderer-ready')."
+        }
+    ],
+    "postBranchChanges": [
+        {
+            "sha": "9043400",
+            "file": "src/utils/gemini.js",
+            "change": "Removed the client-side silence detector that sent sendRealtimeInput({audioStreamEnd:true}) after 700 ms of silence (observeLiveAudioEnergy, pcm16Rms, LIVE_SILENCE_END_MS). Replaced it with LiveAudioGapFiller, which sends low-noise frames when real frames stop for 300 ms or more. liveGapFiller.start() is only called inside startMacOSAudioCapture, which returns early when process.platform !== 'darwin'. On Windows, Live turn ending now relies entirely on server VAD over the AudioWorklet's continuous frames, which are exact digital zeros when nothing is playing. The gap filler's own comment says zeros are avoided on purpose.",
+            "windowsRisk": "medium",
+            "evidence": "`git diff 0cb8874 master -- src/utils/gemini.js` hunks @@-904 and @@-1411; master gemini.js:219-224, 1079-1080, 1510, 1544; liveAudioGapFiller.js header comment; liveAudioGapFiller.test.js:12 'never all zeros'. Whether 3.8 Live closes turns on all-zero PCM is untested [INFERENCE]."
+        },
+        {
+            "sha": "9043400",
+            "file": "src/utils/gemini.js",
+            "change": "Added the LiveTurnWatchdog. It only arms on typed turns (turnStarted in dispatchLiveTypedTurn) and on output received. A voice turn that never gets output or turnComplete is never timed out, so the status can stay 'Listening' on any platform.",
+            "windowsRisk": "low",
+            "evidence": "liveTurnWatchdog.js turnStarted/outputReceived; gemini.js:151,588."
+        },
+        {
+            "sha": "9043400",
+            "file": "src/utils/gemini.js",
+            "change": "Added a code-answer card through gemini-3.8-flash (generateContentStream with ThinkingLevel.LOW) and formatLiveAnswerText for live transcripts. pkill -f was changed to -x for SystemAudioDump, which only runs on macOS.",
+            "windowsRisk": "none",
+            "evidence": "git diff 0cb8874 master -- src/utils/gemini.js; answerFormatting.js."
+        },
+        {
+            "sha": "9043400",
+            "file": "src/components/views/AssistantView.js",
+            "change": "CSS for pre/code and hljs tokens, plus marked.setOptions({langPrefix, highlight}) using window.hljs (loaded by index.html:205). This is a renderer change, but it is not part of startup and has no platform branch.",
+            "windowsRisk": "none",
+            "evidence": "git diff 0cb8874 master -- src/components/views/AssistantView.js"
+        },
+        {
+            "sha": "9043400",
+            "file": "src/utils/geminiLiveSessionConfig.js",
+            "change": "Appends the 'always respond' and 'code handoff' instructions to the systemInstruction.",
+            "windowsRisk": "none",
+            "evidence": "git diff 0cb8874 master -- src/utils/geminiLiveSessionConfig.js"
+        },
+        {
+            "sha": "8c49d85",
+            "file": "src/utils/gemini.js, src/utils/analyzeScreenSend.js",
+            "change": "Analyze Screen HTTP now uses gemini-3.8-flash via buildScreenAnalysisRequest. After an HTTP result, it calls session.sendClientContent({turns, turnComplete:false}) on the running Live session. The fork's own audit (line 113) says Google restricts sendClientContent to initial history seeding. It is wrapped in try/catch and is platform-neutral.",
+            "windowsRisk": "low",
+            "evidence": "master gemini.js:2008-2017; analyzeScreenSend.js buildLiveScreenContextContent; audit doc line 113."
+        },
+        {
+            "sha": "working-tree",
+            "file": "README.md, src/utils/geminiLiveSessionConfig.js, src/utils/prompts.js",
+            "change": "Text only: README section on long answers, rewording of the code handoff instruction, and the interview profile prompt asking for long-form answers.",
+            "windowsRisk": "none",
+            "evidence": "git diff (uncommitted)"
+        }
+    ],
+    "documentedWindowsIssues": [
+        {
+            "issue": "Windows overlay could be blank or off-screen",
+            "status": "Code shipped in 309fadf (opaque window, ready handshake, bounds clamping, display-change recovery, crash handling, tray). Verified only by unit tests and a macOS Electron smoke run. 'Windows smoke is ready for a Windows host', meaning not run.",
+            "source": "docs/windows-performance-report.md:7"
+        },
+        {
+            "issue": "Windows visibility and two-hour readiness",
+            "status": "Unverified until the packaged app passes a 150-minute Windows 11 test, which has not been done.",
+            "source": "docs/windows-performance-report.md:42"
+        },
+        {
+            "issue": "Squirrel Setup.exe not produced. Only out/Cheating Daddy-win32-x64 and a zip were built on the Mac, because Wine was blocked by Gatekeeper.",
+            "status": "Open. 'The same make command can produce Setup.exe on a Windows machine'.",
+            "source": "docs/windows-performance-report.md:40"
+        },
+        {
+            "issue": "Latency (median/p95), private working set, sleep/resume, device removal and display scaling need the packaged app on Windows",
+            "status": "Unmeasured",
+            "source": "docs/windows-performance-report.md:36"
+        },
+        {
+            "issue": "P0: no did-fail-load, renderer-gone or unresponsive recovery",
+            "status": "Fixed in 309fadf (index.js:61-95). Not verified on Windows.",
+            "source": "docs/plans/2026-09-09-windows-performance-audit.md:23"
+        },
+        {
+            "issue": "P0: the 1100x800 window is not clamped to the work area (small screens, Windows scaling)",
+            "status": "Fixed in 309fadf (windowBounds.js, window.js:79-96). Not verified at 125-200% scaling.",
+            "source": "audit:24"
+        },
+        {
+            "issue": "P0: with skipTaskbar there is no recovery route after a startup or keyboard-hook failure",
+            "status": "Fixed with a Tray Show action (index.js:41-58)",
+            "source": "audit:25"
+        },
+        {
+            "issue": "P0: the display capture handler has no rejection or empty-source handling. Capture failure must give a useful status.",
+            "status": "STILL OPEN on master. window.js:149-156 calls desktopCapturer.getSources(...).then(sources => callback({video: sources[0], audio:'loopback'})) with no .catch and no empty-array check.",
+            "source": "audit:26"
+        },
+        {
+            "issue": "Validate the packaged Windows exe: rendered root, clickable controls, Alt and fallback shortcut, hide/restore, monitor removal, 125-200% scaling, capture denied",
+            "status": "Not done. No Windows host or CI exists.",
+            "source": "audit:28"
+        },
+        {
+            "issue": "P0: mic cleanup incomplete (setupLinuxMicProcessing used on Windows); Windows starts loopback even in mic_only",
+            "status": "Fixed in 309fadf (renderer.js:620-783: one owner, stopStream on both, mic_only honored at :709)",
+            "source": "audit:30-38"
+        },
+        {
+            "issue": "P0: old Live connections can start new reconnects after GoAway",
+            "status": "Fixed with ConnectionGeneration (309fadf)",
+            "source": "audit:40-48"
+        },
+        {
+            "issue": "P1: Windows audio delivered in ScriptProcessor bursts of about 171 ms",
+            "status": "Fixed with AudioWorklet 40 ms frames (src/audio-worklet.js). This path is never exercised on macOS speaker_only and has not been run on Windows.",
+            "source": "audit:52-60"
+        },
+        {
+            "issue": "P1: history IPC grows quadratically; unbounded rendered answers; queues and speech segments unbounded",
+            "status": "Fixed in 309fadf according to the report (historyStore JSONL, visibleAnswerRange, boundedTurnQueue, BoundedAudioQueue)",
+            "source": "audit:62-103; report:13-16"
+        },
+        {
+            "issue": "P2: Live screen fallback used sendClientContent mid-session, which Google restricts to history seeding",
+            "status": "Report says replaced by realtime messages (report:18). 8c49d85 adds sendClientContent mid-session again for screen context (gemini.js:2008-2017).",
+            "source": "audit:113; report:18"
+        },
+        {
+            "issue": "Upgrade Electron 30.5.1 and rebuild native modules on Windows, then rerun capture and overlay tests",
+            "status": "Upgraded to 44.3.0. Native-module rebuild and capture/overlay tests on Windows not done.",
+            "source": "audit:132; report:19"
+        }
+    ],
+    "findings": [
+        {
+            "title": "The Windows code path has never been run on Windows; macOS success does not exercise it",
+            "stage": "audio-capture",
+            "severity": "major",
+            "confidence": "confirmed",
+            "evidence": [
+                "docs/windows-performance-report.md:7 'Windows smoke is ready for a Windows host'; :42 'Windows visibility and two-hour readiness remain unverified'",
+                "docs/plans/2026-09-09-windows-performance-audit.md:153 'No Windows executable was launched'",
+                "tests/windows-smoke.spec.js:5 test.skip(process.platform !== 'win32'); no .github/workflows and no playwright config in the repo",
+                "renderer.js:703-707: macOS uses start-macos-audio (SystemAudioDump). renderer.js:709-717,731: non-mac always uses getDisplayMedia loopback → setupSharedAudioWorklet → 'send-audio-frame' → validateAudioFrame (audioPipeline.js:85-94) → routeAudioFrame (gemini.js:1819)",
+                "1a26363/79d63b2/133406a landed within 17 minutes (17:05, 17:13, 17:22 on 2026-09-09) with no recorded Windows confirmation"
+            ],
+            "explanation": "The user's Mac BYOK session uses SystemAudioDump plus main-process enqueueLivePcm. The AudioWorklet, getDisplayMedia loopback, 'send-audio-frame' IPC and the window-paint fixes only run on Windows, or on Mac in mic mode, and none of them has been run on a Windows machine. 'Works on Mac' therefore says nothing about Windows audio capture, the window or the hook.",
+            "fix": "Run `npm run test:windows` and a manual BYOK session on a Windows 11 machine from source (npm start). Capture main and DevTools logs: look for 'Renderer-ready handshake timed out', 'Failed to send audio frame', 'Invalid audio frame', and the getMeetingDiagnostics audioQueueMs value.",
+            "presentInFork": "no"
+        },
+        {
+            "title": "setDisplayMediaRequestHandler has no error or empty-source handling, so getDisplayMedia can hang and Start never finishes on Windows",
+            "stage": "session-start",
+            "severity": "major",
+            "confidence": "likely",
+            "evidence": [
+                "src/utils/window.js:149-156 at master 8c49d85: desktopCapturer.getSources({types:['screen']}).then(sources => callback({ video: sources[0], audio: 'loopback' })) with no .catch, no sources.length check and no callback on failure",
+                "renderer.js:711 awaits getLoopbackStream (getDisplayMedia) with no timeout",
+                "docs/plans/2026-09-09-windows-performance-audit.md:26 lists this as P0 'remaining gap'; 309fadf did not change window.js:149-156"
+            ],
+            "explanation": "On Windows every session start goes through getDisplayMedia, and therefore through this handler. If getSources rejects or returns an empty array, callback is never called or gets video: undefined. The renderer's getDisplayMedia promise then never settles or rejects, so startCapture never returns. On macOS this handler is not used for audio in speaker_only mode, and screenshots go through main-process capture-screen-still.",
+            "fix": "Wrap the handler in try/catch with .catch(() => callback({})). If sources is empty, call callback({}). Add a timeout around getLoopbackStream in renderer.js:711 so a failure becomes a warning ('System audio: ...').",
+            "presentInFork": "no"
+        },
+        {
+            "title": "9043400 removed audioStreamEnd; the noise gap-filler is macOS-only, so Windows turns depend on server VAD over all-zero silence",
+            "stage": "answers-display",
+            "severity": "major",
+            "confidence": "possible",
+            "evidence": [
+                "git diff 0cb8874 master -- src/utils/gemini.js: observeLiveAudioEnergy and audioStreamEnd removed",
+                "gemini.js:219-224 liveGapFiller; :1544 liveGapFiller.start() only inside startMacOSAudioCapture, which returns false off darwin (:1510)",
+                "liveAudioGapFiller.js header: '3.8 Live only closes a user turn while trailing audio keeps arriving ... digital zeros are avoided on purpose'; liveAudioGapFiller.test.js:12",
+                "audio-worklet.js emits a frame every 40 ms of the AudioContext clock; with no audio playing, the MediaStreamSource feeds zeros [INFERENCE]",
+                "LiveTurnWatchdog only arms on typed turns and on output (liveTurnWatchdog.js; gemini.js:151,588), so a voice turn with no response is never timed out",
+                "Upstream issue #168 'Windows 11 - Live session connected, message sent, but stuck on listening' has the same symptom"
+            ],
+            "explanation": "On the Windows branch (0cb8874), turn ending was helped by a client audioStreamEnd after 700 ms of RMS silence. On master, Windows sends only the worklet's continuous frames, which are exact zeros when the meeting is quiet. The author's own comment says zeros were avoided because of 3.8 Live behaviour. If 3.8 does not end a turn on pure zeros, Windows stays on 'Listening...' and no answer appears, while macOS works because its gaps are filled with noise.",
+            "fix": "Start the gap-filler, or add a small noise floor to silent worklet frames, for renderer-delivered audio as well. For example, call liveGapFiller.start() in initializeGeminiSession for BYOK, not only in startMacOSAudioCapture. Or bring back the RMS-based end-of-speech handling for the browser path. Check on Windows with the diagnostics liveUnansweredTurns counter.",
+            "presentInFork": "no"
+        },
+        {
+            "title": "The Windows default hide key is a bare Alt tap caught by a global hook, so any lone Alt press in any app hides the overlay",
+            "stage": "shortcuts",
+            "severity": "minor",
+            "confidence": "possible",
+            "evidence": [
+                "overlayVisibility.js getDefaultToggleVisibility: win32 → 'Alt'",
+                "window.js:190 startOptionTapMonitor(toggleOverlayVisibility) started on did-finish-load (window.js:203)",
+                "optionTapMonitor.js:27-53: toggles on Alt release unless another key was pressed",
+                "window.js:37-43 hideOverlayWindow: setIgnoreMouseEvents(true) + hide(); window has skipTaskbar (window.js:134,174)"
+            ],
+            "explanation": "On Windows, Alt is pressed on its own often (menu access in browsers and Office). Each lone tap hides the overlay globally, and the window has no taskbar entry. A user can read this as 'the app does not show / does not work'. Restoring needs another Alt tap, Ctrl+\\ (only registered while toggleVisibility === 'Alt'), or the tray. On macOS the Option tap is used less often.",
+            "fix": "Use an explicit chord by default on Windows (e.g. Ctrl+\\ or Ctrl+Alt+H), or make Alt-tap hide opt-in, and document the tray Show action.",
+            "presentInFork": "partial"
+        },
+        {
+            "title": "Renderer recovery tears down the session on any did-fail-load or 'unresponsive' event",
+            "stage": "launch",
+            "severity": "minor",
+            "confidence": "possible",
+            "evidence": [
+                "src/index.js (309fadf) createMainWindow: did-fail-load, render-process-gone and 'unresponsive' all call recoverFromRendererFailure, which stops capture, closes Gemini, calls forcefullyCrashRenderer() and shows a dialog",
+                "The did-fail-load handler ignores isMainFrame and errorCode -3 (ERR_ABORTED)"
+            ],
+            "explanation": "On slower Windows machines, a long synchronous renderer task can raise 'unresponsive'. The app then kills the renderer and the meeting. [INFERENCE] Untested on Windows. macOS dev machines rarely trigger it.",
+            "fix": "Ignore did-fail-load when !isMainFrame or code === -3. On 'unresponsive', wait for 'responsive' (or a timeout) before forcing a crash.",
+            "presentInFork": "n/a"
+        },
+        {
+            "title": "Windows smoke tests are weak and have never run",
+            "stage": "other",
+            "severity": "minor",
+            "confidence": "confirmed",
+            "evidence": [
+                "tests/windows-smoke.spec.js:13-24 calls BrowserWindow.hide()/show() directly through app.evaluate, so the Alt hook, Ctrl+\\, toggle-window-visibility IPC and stealth state are not tested",
+                "tests/*.spec.js only check that 'cheating-daddy-app' and '.app-shell' are visible. The selectors still match (CheatingDaddyApp.js:1100 <div class=\"app-shell\">). No session start, capture or IPC is covered.",
+                "package.json scripts test:windows / test:electron run playwright with no config; there is no CI"
+            ],
+            "explanation": "Passing the smoke test would not show that audio, the session or shortcuts work on Windows, and it has not been run there anyway.",
+            "fix": "Extend the Windows smoke test: invoke toggle-window-visibility, start a session with a mocked provider, check that 'send-audio-frame' frames arrive and that renderer-ready fires. Run it on a Windows runner.",
+            "presentInFork": "partial"
+        },
+        {
+            "title": "A Windows package built from this Mac would lack sharp-win32 (local mode only)",
+            "stage": "packaging",
+            "severity": "minor",
+            "confidence": "possible",
+            "evidence": [
+                "package-lock.json:1649 lists @img/sharp-win32-x64 as optional with cpu x64",
+                "node_modules/@img on this Mac has only sharp-darwin-arm64 and sharp-libvips-darwin-arm64",
+                "localai.js:177 loads @huggingface/transformers via dynamic import (local provider only)",
+                "report:19 claims the Windows binaries are present in the package; report:40 says the package was made on the Mac and Setup.exe was not produced"
+            ],
+            "explanation": "If the user installs a win32 zip cross-built on the Mac now, local mode could fail to load sharp. BYOK and cloud are not affected because the import is lazy.",
+            "fix": "Build the Windows artifacts on Windows (npm ci && npm run make), or install with --os=win32 --cpu=x64 before cross-packaging.",
+            "presentInFork": "partial"
+        }
+    ],
+    "openQuestions": [
+        "What is the actual Windows symptom, and which build did the user run (npm start from source on Windows, or the zip/package cross-built on the Mac)? Was it the windows-compatible-cheatingdaddy branch or master?",
+        "Which audioMode and provider (BYOK/cloud/local) was used on Windows? Only the BYOK path is affected by the audioStreamEnd/gap-filler change.",
+        "Does Gemini 3.8 Live end a turn on continuous all-zero PCM? This needs a Mac-side test: feed zeros through the browser path in mic mode, or call send-audio-frame with zeros.",
+        "src/index.html:210 loads a missing src/script.js (it is also missing upstream). The 404 is harmless and does not fire did-fail-load, but it adds console noise in Windows logs."
+    ]
+}

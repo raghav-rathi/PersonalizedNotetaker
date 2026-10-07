@@ -1,0 +1,149 @@
+{
+    "summary": "Main process plus install/packaging path, fork master @ 8c49d85. I could not run anything on Windows. All Windows behaviour below was reproduced on this Mac or simulated with `--os=win32 --cpu=x64`, which is not the same as observing it on Windows.\n\n**Install works.** `npm ci` succeeds even with no SSH key and no git on PATH. npm fetches the git+ssh `@electron/node-gyp` dependency as an HTTPS tarball from codeload. npm 11.19's allowScripts check only warns, and the install scripts still run. Windows native binaries (prebuilds) are present for uiohook-napi, onnxruntime-node and sharp.\n\n**The real failures come later, at `npm start` (`electron-forge start`).** Ranked:\n1. **Forge compiles uiohook-napi from source on Windows.** `@electron/rebuild` 3.7.2 does not recognise uiohook-napi's prebuild file name, so it falls back to a C++ build with node-gyp. That needs Visual Studio 2019/2022 C++ Build Tools plus Python. The bundled `@electron/node-gyp` 10.2.0-electron.1 does not support VS 2026 at all. A rebuild failure aborts `forge start`, so the app never opens. The fork added uiohook-napi in 17e6740; upstream has no native dependencies. It works on the Mac because Xcode built it there: `node_modules/uiohook-napi/build/Release/.forge-meta` = `arm64--149`.\n2. **Node older than 22.12 cannot download the Electron binary.** `electron/install.js` require()s the ESM-only `@electron/get` v5 and `@electron-internal/extract-zip`. Reproduced on Node 20.18.1: `ERR_REQUIRE_ESM`, then 'Electron failed to install correctly'. `npm ci` still exits 0 with only EBADENGINE warnings, so the failure only shows up at `npm start`. The Mac already has `dist/` and `path.txt`, so `install.js` never runs there. This Mac's default `node` is also nvm v20.18.1.\n3. **Smart App Control on Windows 11 can block extract-zip's native binding**, so the Electron download cannot be unzipped (electron/electron#52481).\n4. **The Gemini 3.8 Live gap filler only starts in the macOS SystemAudioDump path.** Per the code's own comment, without it Live turns may never close on Windows: speech is heard but no answer arrives.\n5. **Smaller Windows-only issues:** system audio depends on a display-media handler with no error path; global Ctrl+Arrow/Ctrl+[ ]/Ctrl+Enter/Ctrl+M shortcuts are taken system-wide and their return values are ignored; and Windows artifacts built on the Mac can carry a macOS uiohook build and lack `@img/sharp-win32-x64`.\n\n**Checked and fine on Windows:** squirrel-startup guard, CalculateNativeWinOcclusion switch, opaque `show:true` window with content protection, `skipTaskbar` and `screen-saver` level, Tray `logo.ico` inside asar (Electron 44 copies `.ico` out of asar), storage under `AppData\\Roaming\\cheating-daddy-config`, history file names (numeric `Date.now()` session ids, no ':'), `pkill`/SystemAudioDump (guarded behind `darwin` at gemini.js:1510, before the `pkill` at 1513), Ctrl+\\ fallback when Alt-tap is unavailable, fuses with Windows asar integrity (packager 18.3.6 writes the ELECTRONASAR resource), Squirrel maker names, and the icon path.",
+    "installVerdict": "`npm ci` / `npm install` succeeds on a typical Windows machine: no SSH key or git needed, and all win32 native prebuilds are present. The app still does not start on many Windows machines, because `npm start` (electron-forge start) then hits two separate walls. (a) Its 'Preparing native dependencies' step compiles uiohook-napi from source with node-gyp. That fails without VS 2019/2022 C++ Build Tools and Python, and always fails if only VS 2026 is installed. (b) On Node < 22.12, the lazy Electron binary download dies with ERR_REQUIRE_ESM (reproduced). Windows 11 with Smart App Control enforced can also block extracting the Electron zip.",
+    "installCommandOutput": "Run 1, keys blocked (in /tmp/cdwin-MainProcessInstall/install-test; npm 11.19.1 ran on the PATH node v20.18.1):\n$ GIT_SSH_COMMAND=\"ssh -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityFile=/dev/null -F /dev/null\" GIT_TERMINAL_PROMPT=0 /opt/homebrew/bin/npm ci --ignore-scripts --no-audit --no-fund --cache <fresh>\nnpm warn EBADENGINE Unsupported engine { package: '@electron-internal/extract-zip@1.0.5', required: { node: '>=22.12.0' }, current: { node: 'v20.18.1', npm: '11.19.1' } }\nnpm warn EBADENGINE Unsupported engine { package: 'electron@44.3.0', required: { node: '>= 22.12.0' } ... }\nnpm warn EBADENGINE Unsupported engine { package: '@electron/get@5.1.0', required: { node: '>=22.12.0' } ... }\nnpm warn skipping integrity check for git dependency ssh://git@github.com/electron/node-gyp.git\n(deprecation warnings)\nadded 671 packages in 10s\nEXIT=0\nnpm cache index shows the git dependency was fetched as codeload.github.com/electron/node-gyp/tar.gz/06b29aafb7708acef8b3669835c8a7857ebc92d2 (HTTPS, no SSH).\n\nRun 2, no git binary at all (env -i PATH=<dir containing only node v26.10.0>, same SSH block, fresh cache, install-nogit):\nnpm warn skipping integrity check for git dependency ssh://git@github.com/electron/node-gyp.git\nadded 671 packages in 36s\nEXIT=0; node_modules/@electron/node-gyp/package.json present.\n\nRun 3, Windows simulation with scripts enabled (install-win; npm ci --os=win32 --cpu=x64):\nadded 601 packages in 7s\nnpm warn install-scripts 6 packages have install scripts not yet covered by allowScripts:\n  @google/genai@2.19.0 (preinstall: echo 'preinstall: no-op')\n  electron-winstaller@5.4.0 (install: node ./script/select-7z-arch.js)\n  onnxruntime-node@1.21.0 (postinstall: node ./script/install)\n  protobufjs@7.5.4 (postinstall: node scripts/postinstall)\n  sharp@0.34.5 (install: node install/check.js || npm run build)\n  uiohook-napi@1.5.5 (install: node-gyp-build)\nEXIT=0. Installed: @img/sharp-win32-x64@0.34.5 (matches sharp 0.34.5); onnxruntime-node/bin/napi-v3/win32/{x64,arm64}/{onnxruntime_binding.node,onnxruntime.dll,DirectML.dll}; uiohook-napi/prebuilds/{win32-x64,win32-arm64}/uiohook-napi.node. The scripts did run: `cmp vendor/7z.exe vendor/7z-arm64.exe` is identical; 7z.exe is absent in the --ignore-scripts tree.\n\n`npm ls`: cheating-daddy -> @electron-forge/cli@7.11.2 -> @electron-forge/core-utils@7.11.2 -> @electron/rebuild@3.7.2 -> @electron/node-gyp@10.2.0-electron.1 (git+ssh…#06b29aa). This is dev/forge-only (used by the rebuild step of start/package/make) and never loaded by the app at runtime.\n\nRun 4, lazy Electron download on Node 20.18.1 (install-test):\nDownloading Electron binary...\nnode_modules/electron/install.js:3  const { downloadArtifact } = require('@electron/get');\nError [ERR_REQUIRE_ESM]: require() of ES Module .../node_modules/electron/node_modules/@electron/get/dist/index.js from .../node_modules/electron/install.js not supported.\nTHROWN: Electron failed to install correctly. Please delete `node_modules/electron` and run \"npx install-electron --no\" manually.\n\nRun 5, @electron/rebuild prebuild detection for uiohook-napi (/tmp/cdwin-MainProcessInstall/prebuild-check.js):\nwin32-x64: usesTool=true findPrebuiltModule=false\nwin32-arm64: usesTool=true findPrebuiltModule=false\n(so rebuild goes to node-gyp, a source compile)",
+    "findings": [
+        {
+            "title": "electron-forge start/make compiles uiohook-napi from source on Windows (needs VS 2019/2022 C++ + Python; VS 2026 unsupported) and aborts the launch",
+            "stage": "launch",
+            "severity": "blocker",
+            "confidence": "likely",
+            "evidence": [
+                "package.json@8c49d85: dependencies include \"uiohook-napi\": \"^1.5.5\"; it was added in 17e6740 (git log -S'uiohook-napi' -- package.json). upstream/master package.json has no native deps (only @google/genai, electron-squirrel-startup, ws).",
+                "forge.config.js:30 `rebuildConfig: {}`, so @electron/rebuild walks every prod dependency that has a root binding.gyp. Only uiohook-napi qualifies; sharp's binding.gyp is under src/.",
+                "@electron/rebuild@3.7.2 lib/module-type/prebuildify.js: it only accepts prebuilds/<plat>-<arch>/{electron.napi.node,node.napi.node,electron.abi<ABI>.node}. uiohook-napi ships prebuilds/win32-x64/uiohook-napi.node.",
+                "Run 5 output: win32-x64 and win32-arm64 both give findPrebuiltModule=false, so module-rebuilder.js:139-145 calls rebuildNodeGypModule (a source build).",
+                "@electron-forge/core dist/api/start.js:54-61: the 'Preparing native dependencies' task awaits listrCompatibleRebuildHook with no catch, before locateElectronExecutable (start.js:126). A rebuild error aborts `npm start`.",
+                "@electron/node-gyp 10.2.0-electron.1 lib/find-visualstudio.js:122,164,225: only VS 2019/2022 (and 2017) are searched. VS 18 (2026) gives 'unknown version … could not find a version of Visual Studio 2017 or newer' (https://github.com/electron/rebuild/issues/1264; fixed only in newer @electron/rebuild with node-gyp ^12.2).",
+                "Mac evidence that the source build happens: /Users/whiterose/Documents/CheatingDaddyNew/node_modules/uiohook-napi/build/Release/{uiohook_napi.node,uiohook.a,.forge-meta='arm64--149'} plus build/Makefile. Xcode CLT compiled it on the Mac.",
+                "node-gyp-build in Electron accepts the untagged N-API prebuild: matchTags('electron','149')(parseTags('uiohook-napi.node')) === true. So skipping the rebuild is safe."
+            ],
+            "explanation": "On a fresh Windows clone, `npm start` runs @electron/rebuild before Electron is launched. It cannot match uiohook-napi's prebuild name, so it compiles libuiohook from source with node-gyp. That needs Python 3 plus the Visual Studio 2019/2022 'Desktop development with C++' workload, and it downloads Electron headers. A typical Windows machine has none of these, and a machine with only VS 2026 is not recognised by the bundled @electron/node-gyp. The rebuild throws, forge start stops at 'Preparing native dependencies', and no window ever appears. `npm run make` / `package` on Windows goes through the same rebuild. macOS works because Xcode Command Line Tools are present and the build already succeeded there. Upstream has no native module, so this regression is fork-specific.",
+            "fix": "In forge.config.js set `rebuildConfig: { ignoreModules: ['uiohook-napi'] }` (supported by @electron/rebuild 3.7.2, rebuild.js:62,139-140), or `onlyModules: []`. uiohook-napi is N-API, so its shipped prebuilds/win32-x64 and win32-arm64 binaries load in Electron 44 without a rebuild. Alternatively document VS 2022 Build Tools + Python as prerequisites, or upgrade to a forge/@electron/rebuild release that bundles node-gyp ≥12.2 (still needs a compiler).",
+            "presentInFork": "no"
+        },
+        {
+            "title": "Node < 22.12 cannot fetch the Electron 44 binary at first `npm start` (ERR_REQUIRE_ESM), and npm ci passes with warnings only",
+            "stage": "install",
+            "severity": "blocker",
+            "confidence": "confirmed",
+            "evidence": [
+                "node_modules/electron/package.json (44.3.0): engines.node '>= 22.12.0', no install/postinstall script; index.js downloads lazily via spawnSync(process.execPath, ['install.js']) when path.txt or dist/ is missing.",
+                "electron/install.js:3 `require('@electron/get')`. The nested electron/node_modules/@electron/get@5.1.0 is ESM. @electron-internal/extract-zip@1.0.5 is \"type\":\"module\" with engines >=22.12.0.",
+                "Run 4 (Node v20.18.1): Error [ERR_REQUIRE_ESM] … install.js:3 → 'Electron failed to install correctly. Please delete `node_modules/electron` and run \"npx install-electron --no\" manually.'",
+                "Run 1: npm ci exits 0 with only 'npm warn EBADENGINE' for electron@44.3.0, @electron/get@5.1.0 and @electron-internal/extract-zip@1.0.5.",
+                "@electron-forge/core dist/util/electron-executable.js:12 require()s the electron module, which triggers the download inside `electron-forge start`.",
+                "On this Mac: `which -a node` shows the first node is ~/.nvm/versions/node/v20.18.1. The repo's node_modules/electron/path.txt = 'Electron.app/Contents/MacOS/Electron' and dist/version = 44.3.0 already exist, so install.js never runs here.",
+                "package.json@309fadf moved electron from ^30.0.5 to 44.3.0, which introduced the Node 22.12 floor."
+            ],
+            "explanation": "Windows users commonly have Node 20 LTS, or Node 22 below 22.12, where require(esm) is not enabled. `npm ci` succeeds, but the first `npm start` tries to download Electron with an ESM-only downloader through require(), crashes, and forge reports that Electron failed to install. The suggested `npx install-electron --no` fails the same way. On the Mac the binary was already downloaded earlier, so the same Node 20 shell keeps working.",
+            "fix": "Require Node ≥ 22.12 (Node 24 LTS recommended): add `\"engines\": {\"node\": \">=22.12.0\"}` to package.json plus an `.npmrc` with `engine-strict=true` (and/or `.nvmrc`). Document it in the README Windows section. Existing broken trees: delete node_modules/electron and reinstall under Node ≥ 22.12.",
+            "presentInFork": "no"
+        },
+        {
+            "title": "Windows 11 Smart App Control can block Electron's unzip step (unsigned @electron-internal/extract-zip .node)",
+            "stage": "install",
+            "severity": "major",
+            "confidence": "possible",
+            "evidence": [
+                "node_modules/@electron-internal/extract-zip@1.0.5 ships index.win32-x64-msvc.node / index.win32-arm64-msvc.node, a native binding used by electron/install.js extractFile().",
+                "electron/install.js comment: 'the extractor has a native binding, and an OS policy can block its load (see electron/electron#52481)'. 44.3.0 only made the require lazy, so the already-installed case still works.",
+                "https://github.com/electron/electron/issues/52481 (closed 2026-08-23): with Smart App Control enforced, Windows refuses to dlopen the unsigned index.win32-x64-msvc.node, so install never produces dist/ or path.txt. Fix PRs only made the require lazy and the error clearer."
+            ],
+            "explanation": "On Windows 11 machines with Smart App Control enforced (common on new consumer PCs), the zip is downloaded but cannot be extracted, so Electron never installs. macOS has no equivalent policy.",
+            "fix": "Tell users to set ELECTRON_OVERRIDE_DIST_PATH, or manually unzip electron-v44.3.0-win32-x64.zip (from %LOCALAPPDATA%\\electron\\Cache) into node_modules\\electron\\dist and write 'electron.exe' to node_modules\\electron\\path.txt. Alternatively distribute a packaged build made on Windows CI instead of running from source.",
+            "presentInFork": "no"
+        },
+        {
+            "title": "Gemini 3.8 Live gap filler starts only in the macOS SystemAudioDump path, so Windows turns may never close",
+            "stage": "answers-display",
+            "severity": "major",
+            "confidence": "possible",
+            "evidence": [
+                "src/utils/liveAudioGapFiller.js:1-3 (8c49d85): 'Gemini 3.8 Live only closes a user turn while trailing audio keeps arriving, and it ignores audioStreamEnd. If system audio stops delivering frames after speech, the turn never ends. … (digital zeros are avoided on purpose)'.",
+                "src/utils/gemini.js:1509-1510 startMacOSAudioCapture returns early unless darwin; liveGapFiller.start() is called only at gemini.js:1544 inside that path.",
+                "gemini.js:1819-1830 routeAudioFrame (used by 'send-audio-frame' from the Windows renderer path) calls enqueueLivePcm, which calls liveGapFiller.noteRealFrame() (gemini.js:1080). No other liveGapFiller.start() exists.",
+                "Commit 9043400 message: 'Fill macOS system-audio gaps with a low noise floor … so turns always close'.",
+                "src/audio-worklet.js and src/utils/renderer.js:645-690: the Windows renderer streams 40 ms frames continuously, so silence arrives as digital zeros, not the noise floor the filler provides."
+            ],
+            "explanation": "The fork's fix that makes Gemini 3.8 Live end user turns is wired only into the macOS capture path. On Windows, system audio comes from the renderer's getDisplayMedia loopback through send-audio-frame, and the filler timer is never started. If the WASAPI loopback stops delivering or delivers digital zeros, Windows sessions can match the 'connected but stuck listening / no answer' pattern, while the same session on Mac answers. Not verified on Windows [INFERENCE], but the asymmetry is in the code.",
+            "fix": "Start liveGapFiller when a BYOK Live session begins (initialize-gemini, or the first send-audio-frame while currentProviderMode==='byok'), not inside startMacOSAudioCapture. Stop it in close-session / stopMacOSAudioCapture as today.",
+            "presentInFork": "no"
+        },
+        {
+            "title": "Windows system audio relies entirely on setDisplayMediaRequestHandler, which has no error path; useSystemPicker is ignored on Windows",
+            "stage": "audio-capture",
+            "severity": "minor",
+            "confidence": "likely",
+            "evidence": [
+                "src/utils/window.js:149-156: desktopCapturer.getSources({types:['screen']}).then(sources => callback({ video: sources[0], audio: 'loopback' })) with no .catch and no empty-sources check; registered with { useSystemPicker: true }.",
+                "src/utils/renderer.js:703-713 (8c49d85): macOS uses SystemAudioDump via 'start-macos-audio'; non-macOS calls getLoopbackStream() → navigator.mediaDevices.getDisplayMedia (renderer.js:633-645).",
+                "Electron docs (session.setDisplayMediaRequestHandler): useSystemPicker is a macOS-only experimental option; 'loopback' audio is supported on Windows."
+            ],
+            "explanation": "On Mac this handler is not involved in audio. On Windows every byte of system audio goes through it. If getSources rejects (e.g. a GPU or driver capture failure), callback is never called and the renderer's getDisplayMedia promise never settles, so startCapture hangs. If sources is empty, video:undefined makes Electron reject the request, and the session runs with no system audio (only a warning).",
+            "fix": "Add .catch(() => callback({})) and handle an empty sources list (callback({}) or pick the source matching screen.getPrimaryDisplay().id). Pass useSystemPicker only on darwin.",
+            "presentInFork": "no"
+        },
+        {
+            "title": "Windows global shortcuts take over common editor keys system-wide and failures go unnoticed",
+            "stage": "shortcuts",
+            "severity": "minor",
+            "confidence": "confirmed",
+            "evidence": [
+                "src/utils/window.js:249-264: Windows defaults are Ctrl+Up/Down/Left/Right, Ctrl+M, Ctrl+Enter, Ctrl+[ / Ctrl+], Ctrl+Shift+Up/Down, Ctrl+Shift+E (Mac uses Alt+Arrows / Cmd+…).",
+                "window.js:306, 317, 330, 342, 355, 379, 392, 405, 418, 431: globalShortcut.register return values are ignored and 'Registered …' is logged unconditionally (Electron returns false, not throws, when an accelerator is already taken).",
+                "overlayVisibility.js:23-25 plus window.js:315-337: the Windows toggle default is 'Alt', handled only by uiohook-napi (optionTapMonitor.js:18-24). The Ctrl+\\\\ fallback is registered when toggleVisibility==='Alt'."
+            ],
+            "explanation": "While the app runs on Windows, Ctrl+Left/Right word navigation, Ctrl+[ ] indent in VS Code, Ctrl+Enter submit, and similar keys stop working in every other app. If another app already owns an accelerator, that shortcut silently does nothing. Alt-tap hide depends on uiohook-napi loading; if it fails (see the rebuild finding), only Ctrl+\\\\ remains, and the warning is visible only in the console.",
+            "fix": "Check the return value of globalShortcut.register and report failures to the renderer. Consider Ctrl+Alt+… or Ctrl+Shift+… defaults on Windows that do not collide with text editing.",
+            "presentInFork": "partial"
+        },
+        {
+            "title": "Windows artifacts built on the Mac are unreliable (wrong-OS uiohook build, missing sharp-win32, no Squirrel)",
+            "stage": "packaging",
+            "severity": "minor",
+            "confidence": "possible",
+            "evidence": [
+                "docs/windows-performance-report.md (309fadf): 'The Windows x64 application package is generated at `out/Cheating Daddy-win32-x64`, and the portable ZIP … under out/make/zip/win32/x64. Electron Forge could not produce the Squirrel setup executable on this Mac'. maker-zip is not in forge.config.js:31-60 at 8c49d85.",
+                "@electron/rebuild lib/module-type/node-gyp/node-gyp.js:78: 'node-gyp does not support cross-compiling native modules from source.' module-rebuilder.js:51-58 skips the rebuild when build/Release/.forge-meta equals `${arch}--${ABI}`, so on an x64 Mac a darwin uiohook_napi.node built for x64 can pass through.",
+                "node-gyp-build/node-gyp-build.js:33-35: build/Release is preferred over prebuilds/, so a Mach-O build/Release/uiohook_napi.node would be loaded on Windows and fail.",
+                "package.json optionalDependencies '@img/sharp-win32-x64' has os:['win32'] and is skipped by npm on macOS. @huggingface/transformers (local mode) needs sharp.",
+                "forge.config.js:9 extraResource './src/assets/SystemAudioDump' (Mach-O) is copied into the Windows resources (harmless)."
+            ],
+            "explanation": "If the Windows build the user tested was cross-built on the Mac: on Apple Silicon the package step should have thrown for uiohook. On an x64 Mac a macOS uiohook binary can be shipped, which disables Alt hide on Windows, and local AI mode lacks sharp's win32 binary. Squirrel Setup.exe cannot be made on macOS at all. A source run on Windows does not hit this.",
+            "fix": "Build Windows artifacts on Windows (e.g. a GitHub Actions windows-latest job running `npm ci && npm run make`) with rebuildConfig ignoreModules ['uiohook-napi']. Make extraResource conditional on darwin (e.g. compute it in forge.config.js from process.platform or a packageAfterCopy hook).",
+            "presentInFork": "no"
+        },
+        {
+            "title": "Main-process HTTP/WebSocket clients ignore Windows system proxy settings",
+            "stage": "session-start",
+            "severity": "minor",
+            "confidence": "possible",
+            "evidence": [
+                "src/utils/geminiLiveTransport.js:1-3: the Live session uses raw `ws` against wss://generativelanguage.googleapis.com/… with no agent or proxy option.",
+                "src/utils/cloud.js:1 `require('ws')`; gemini.js:1 @google/genai in Node (fetch), neither configured with a proxy agent."
+            ],
+            "explanation": "Unlike Chromium (the renderer), Node's ws/fetch in the main process ignore the WinINET/PAC proxy. On corporate-managed Windows laptops that only allow traffic through a proxy, the Live socket never opens, while the UI loads normally. The Mac in question evidently has direct internet. [INFERENCE] Not specific to Windows code, but more common on Windows corporate machines.",
+            "fix": "Resolve the proxy with session.defaultSession.resolveProxy(url) and pass an https-proxy-agent to ws / the genai client, or honour HTTPS_PROXY.",
+            "presentInFork": "no"
+        },
+        {
+            "title": "An exception in startup ordering would leave the UI with no IPC handlers",
+            "stage": "launch",
+            "severity": "minor",
+            "confidence": "possible",
+            "evidence": [
+                "src/index.js:103-119: createMainWindow(), createTray() and startDiagnostics() (fs.mkdirSync of app.getPath('logs')/diagnostics, diagnostics.js:19) run before setupGeminiIpcHandlers/setupStorageIpcHandlers/setupGeneralIpcHandlers inside an un-caught whenReady().then(async …)."
+            ],
+            "explanation": "If Tray creation or the diagnostics mkdir throws on a given Windows machine (e.g. a redirected or locked AppData), the promise rejects silently. The window has already loaded, but every ipcRenderer.invoke fails with 'No handler registered', so nothing works. Electron 44's Tray does handle .ico inside asar (shell/common/api/electron_api_native_image.cc:114-136 @ v44.3.0), so no concrete trigger was found.",
+            "fix": "Register the IPC handlers before creating the window and tray, and wrap createTray/startDiagnostics in try/catch with logging.",
+            "presentInFork": "no"
+        }
+    ],
+    "openQuestions": [
+        "Exact Windows symptom and how the app was run: source `npm start` (which Node version? VS Build Tools/Python installed?) or a Mac-built win32 zip/package?",
+        "Is Smart App Control enforced on the Windows machine (Windows Security > App & browser control)?",
+        "Does Gemini 3.8 Live on Windows receive transcripts but never produce answers? If so, that points to the gap-filler asymmetry (gemini.js:1544) rather than install/launch.",
+        "Was the Windows package produced on an Intel or Apple Silicon Mac (this decides whether a macOS uiohook build was shipped in it)?"
+    ]
+}
