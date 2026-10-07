@@ -50,6 +50,8 @@ Live's own reply stays hidden unless both fail. If the interviewer pauses mid-qu
 
 Answer length, voice and content come from **AI Context → Custom Instructions**. `docs/prompts/interview-prompt.txt` is a ready-made version in the voice of a mid-level engineer talking, with short sentences, contractions and plain words. Answer length fits the question: 10 to 20 seconds to name something, about 40 seconds for a definition, about a minute for why, how and experience questions, and about a minute and a half for a story. It includes practiced answers for seven likely questions. It brings up your background only when the question is about you, builds stories only from the listed facts, and has a coding mode. Paste it in, then start a new session; custom instructions are loaded at session start.
 
+`docs/prompts/interview-prompt-deeper-draft.txt` is an alternative draft, not in use. It asks for more technical depth (how things work underneath, the real component names, the tradeoff). In a blind test with GPT-6 Astra it gave the stronger interview answer in 17 of 28 comparisons but sounded less natural, and its lengths and practiced answers predate the shorter targets.
+
 Word counts are generation targets, not guarantees. Read an answer before you say it: the model can still add details that are not in your background.
 
 ## Keyboard Shortcuts

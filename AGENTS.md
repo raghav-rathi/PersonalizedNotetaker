@@ -422,6 +422,10 @@ Commits on top of Rohit's `8c49d85`:
     - Why: the owner asked for slightly shorter answers.
     - Tests: the same 14 interview questions answered by GPT-6 Astra before and after. Total length went from 3,048 to 2,417 words (21% shorter), and 13 of 14 answers landed inside their new range.
 
+10. 2026-10-07 `docs: add the deeper-answer prompt draft`.
+    - What: `docs/prompts/interview-prompt-deeper-draft.txt`, a prompt written from scratch around what interviewers reward (answer first, the mechanism underneath with real component names, one concrete scenario, the tradeoff), combined with the current voice rules, background facts and practiced answers. It is not installed.
+    - Results: 14 questions answered by GPT-6 Astra with the current prompt and with this draft, compared blind in both orders by Claude Opus 5.5. The draft gave the stronger interview answer in 17 of 28 comparisons, but sounded more like a real person in only 6 of 28. Its length targets and practiced answers predate change 9, so they need shortening before use.
+
 Not in git (Mac only): the owner's `preferences.json` and API keys, backups of older prompts (`preferences.backup-before-ste-prompt.json`, `preferences.backup-before-humanistic-prompt.json`), and the downloaded Electron binary.
 
 No app code was changed to fix Windows. Change 5 changes how answers are written on every platform, not a Windows fix. The exact Windows symptom is unknown, and none of these fixes can be tested on a Mac. The plan is to confirm the cause on the Windows PC first, then apply only the fixes it needs.
