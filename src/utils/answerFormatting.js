@@ -22,17 +22,4 @@ function formatLiveAnswerText(text) {
         .trim();
 }
 
-const CODE_REQUEST_PATTERNS = [
-    /\b(code|coding|snippet|pseudo ?code|leetcode|sql query|regex)\b/i,
-    /\bimplement(s|ed|ing|ation)?\b/i,
-    /\b(write|give|show)\b.{0,40}\b(function|class|method|query|script|program|solution)\b/i,
-    /\b(in|using)\s+(java|python|c\+\+|c#|javascript|typescript|golang|rust|kotlin|swift|scala|ruby|php)\b/i,
-];
-
-/** @param {string} text */
-function needsCodeAnswer(text) {
-    const value = String(text || '');
-    return value.trim().length > 0 && CODE_REQUEST_PATTERNS.some(pattern => pattern.test(value));
-}
-
-module.exports = { formatLiveAnswerText, needsCodeAnswer };
+module.exports = { formatLiveAnswerText };

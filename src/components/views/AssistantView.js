@@ -589,11 +589,7 @@ export class AssistantView extends LitElement {
         if (textInput && textInput.value.trim()) {
             const message = textInput.value.trim();
             textInput.value = '';
-            const result = await this.onSendText(message);
-            if (result?.queueFull) {
-                textInput.value = message;
-                textInput.focus();
-            }
+            await this.onSendText(message);
         }
     }
 

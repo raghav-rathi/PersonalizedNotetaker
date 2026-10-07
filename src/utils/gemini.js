@@ -26,12 +26,12 @@ const { BoundedAudioQueue, validateAudioFrame } = require('./audioPipeline');
 const { ConnectionGeneration } = require('./connectionGeneration');
 const { createTurnId, emitAnswer } = require('./answerEvents');
 const { buildRelevantContext } = require('./historyStore');
-const { BoundedTurnQueue } = require('./boundedTurnQueue');
 const { connectGeminiLive } = require('./geminiLiveTransport');
 const { buildGeminiLiveSessionConfig, isLiveServerInterrupt } = require('./geminiLiveSessionConfig');
 const { LiveAudioGapFiller } = require('./liveAudioGapFiller');
 const { LiveTurnWatchdog } = require('./liveTurnWatchdog');
-const { formatLiveAnswerText, needsCodeAnswer } = require('./answerFormatting');
+const { formatLiveAnswerText } = require('./answerFormatting');
+const { nextVoiceQuestion, questionText } = require('./questionMerge');
 
 // Lazy-loaded to avoid circular dependency (localai.js imports from gemini.js)
 let _localai = null;
@@ -147,8 +147,9 @@ function ingestLiveOutputTranscription(message) {
     }
 
     liveOutputText = mergeLiveInputTranscription(liveOutputText, incoming);
-    liveTurnActive = true;
     liveTurnWatchdog.outputReceived();
+    // In BYOK the text model writes the visible answer. Live's spoken reply stays hidden unless that answer fails.
+    if (textAnswersEnabled() && !liveAnswerFallbackPending) return true;
     if (!liveTurnId) liveTurnId = createTurnId('live');
     emitAnswer(sendToRenderer, liveTurnId, liveOutputStarted ? 'update' : 'start', formatLiveAnswerText(liveOutputText), liveOutputSequence++);
     liveOutputStarted = true;
@@ -170,11 +171,11 @@ function finalizeLiveConversationTurn() {
             transcription: input,
         }).catch(error => sendToRenderer('update-status', `History error: ${error.message}`));
     }
-    if (output) {
+    if (output && (!textAnswersEnabled() || liveAnswerFallbackPending)) {
         if (!liveTurnId) liveTurnId = createTurnId('live');
         emitAnswer(sendToRenderer, liveTurnId, 'complete', output, liveOutputSequence++);
-        if (liveTurnId === codeOwnedTurnId) pendingTypedQuestion = null;
-        else saveConversationTurn(input || '(audio)', output);
+        saveConversationTurn(input || '(audio)', output);
+        liveAnswerFallbackPending = false;
     }
     currentTranscription = '';
     liveOutputText = '';
@@ -183,8 +184,6 @@ function finalizeLiveConversationTurn() {
     liveOutputSequence = 0;
     messageBuffer = '';
     awaitingLateTranscript = false;
-    liveTurnActive = false;
-    dispatchNextTypedTurn();
 }
 
 function resetLiveConversationBuffers() {
@@ -229,15 +228,12 @@ let pendingLiveImage = null;
 let liveImageSendInFlight = false;
 let lastScreenshotJpeg = null;
 let pendingTypedQuestion = null;
-const typedTurnQueue = new BoundedTurnQueue(3);
-let liveTurnActive = false;
 let liveTurnId = null;
 let liveOutputSequence = 0;
 // Set when the watchdog finished a turn itself; the stalled turn's late interrupted/turnComplete is then ignored.
 let stalledTurnPending = false;
 let liveUnansweredTurns = 0;
 let liveStalledTurns = 0;
-let liveNoOutputTurns = 0;
 const liveTurnWatchdog = new LiveTurnWatchdog({
     onStall: () => {
         console.warn('Gemini Live answer stalled without turnComplete; finishing the turn');
@@ -246,15 +242,6 @@ const liveTurnWatchdog = new LiveTurnWatchdog({
         finalizeLiveConversationTurn();
         sendToRenderer('update-status', 'Listening...');
     },
-    onNoOutput: () => {
-        if (liveOutputText.trim()) return;
-        console.warn('Gemini Live sent no answer for a typed turn');
-        liveNoOutputTurns++;
-        liveTurnActive = false;
-        pendingTypedQuestion = null;
-        sendToRenderer('update-status', 'No answer from Gemini, ask again');
-        dispatchNextTypedTurn();
-    },
 });
 global.getMeetingDiagnostics = () => {
     const gaps = liveGapFiller.stats();
@@ -262,14 +249,12 @@ global.getMeetingDiagnostics = () => {
         providerMode: currentProviderMode,
         audioQueueFrames: geminiAudioQueue.length,
         audioQueueMs: Math.round(geminiAudioQueue.durationMs),
-        typedQueue: typedTurnQueue.length,
         reconnecting: reconnectInFlight,
         summaryRunning: summaryInFlight,
         audioGapsFilled: gaps.gapsFilled,
         longestAudioGapMs: gaps.longestGapMs,
         liveUnansweredTurns,
         liveStalledTurns,
-        liveNoOutputTurns,
     };
 };
 
@@ -336,7 +321,7 @@ function buildContextMessage() {
 // Conversation management functions
 function initializeNewSession(profile = null, customPrompt = null) {
     currentSessionId = Date.now().toString();
-    cancelCodeAnswers();
+    cancelTextAnswers();
     conversationSequence = 0;
     screenSequence = 0;
     transcriptSequence = 0;
@@ -346,8 +331,6 @@ function initializeNewSession(profile = null, customPrompt = null) {
     groqConversationHistory = [];
     lastScreenshotJpeg = null;
     pendingTypedQuestion = null;
-    typedTurnQueue.clear();
-    liveTurnActive = false;
     currentSummary = '';
     completedTurnsSinceSummary = 0;
     lastSummaryAt = 0;
@@ -473,153 +456,108 @@ function composeUserTurn(text) {
     return `${context}\n\nCurrent user question (answer using the full conversation and any screen context above):\n${text}`;
 }
 
-// Spoken Live answers lose newlines and indentation, so code questions also get a text-model card.
-const CODE_ANSWER_MODEL = 'gemini-3.8-flash';
-const CODE_ANSWER_DEBOUNCE_MS = 400;
-const CODE_ANSWER_CONTEXT_CHARS = 6000;
-const CODE_ANSWER_INSTRUCTION = `You write the code part of answers for a live technical interview overlay. The user reads your reply on screen.
-Reply in markdown only, with no preamble, in exactly this shape:
-
-**Approach**
-- two to four short bullets
-
-One fenced code block with a language tag containing the complete, runnable solution, properly indented, with brief comments only where they help.
-
-**Complexity**: time and space on one line, in plain text such as O(n log n) with no LaTeX or $ signs.
-
-Use the language the question asks for; otherwise the language used earlier in the conversation; otherwise Python.`;
-let codeAnswerClient = null;
-let codeAnswerClientKey = '';
-let codeAnswerGeneration = 0;
-let codeAnswerTimer = null;
+// Gemini Live can only answer by speaking, and the transcript of that speech gives short, unformatted
+// answers. In BYOK mode Live listens and transcribes, and a text model writes every answer shown.
+const ANSWER_MODEL = 'gemini-3.8-flash';
+const ANSWER_MAX_OUTPUT_TOKENS = 8192;
+// 3.x sends the question transcript in snapshots; wait for it to settle before answering.
+const ANSWER_DEBOUNCE_MS = 400;
+const ANSWER_CONTEXT_CHARS = 6000;
+// Every answer stream starts above all earlier sequences, so a merged question can replace its card.
+const ANSWER_SEQUENCE_STEP = 1000000;
+let answerClient = null;
+let answerClientKey = '';
+let answerGeneration = 0;
+let answerTimer = null;
+let answerSequenceBase = 0;
 let liveInputTurnSeq = 0;
-let codeAnswerFiredSeq = -1;
-// The code answer takes over the Live card for its turn: its updates use sequences far above the
-// Live transcript's, so the renderer shows the spoken summary first and then replaces it with the code.
-const CODE_SEQUENCE_BASE = 1000000;
-let codeOwnedTurnId = null;
+let lastVoiceQuestion = null;
+// Set when a text answer fails, so Live's own spoken answer is shown for the turn instead.
+let liveAnswerFallbackPending = false;
 
-function claimLiveCardForCode() {
-    if (!liveTurnId) liveTurnId = createTurnId('live');
-    codeOwnedTurnId = liveTurnId;
-    return liveTurnId;
+function textAnswersEnabled() {
+    return currentProviderMode === 'byok';
 }
 
-// Shared by the code card and screen analysis so the HTTPS connection stays warm.
+// Shared by text answers and screen analysis so the HTTPS connection stays warm.
 function getTextModelClient(apiKey) {
-    if (!codeAnswerClient || codeAnswerClientKey !== apiKey) {
-        codeAnswerClient = new GoogleGenAI({ apiKey });
-        codeAnswerClientKey = apiKey;
+    if (!answerClient || answerClientKey !== apiKey) {
+        answerClient = new GoogleGenAI({ apiKey });
+        answerClientKey = apiKey;
     }
-    return codeAnswerClient;
+    return answerClient;
 }
 
-function cancelCodeAnswers() {
-    codeAnswerGeneration++;
-    if (codeAnswerTimer) clearTimeout(codeAnswerTimer);
-    codeAnswerTimer = null;
+function cancelTextAnswers() {
+    answerGeneration++;
+    clearTimeout(answerTimer);
+    answerTimer = null;
+    lastVoiceQuestion = null;
+    liveAnswerFallbackPending = false;
 }
 
-// 3.x sends the question transcript in snapshots; wait for it to settle, then fire once per turn.
-function scheduleCodeAnswerForVoiceTurn() {
+function scheduleAnswerForVoiceTurn() {
     const turnSeq = liveInputTurnSeq;
-    const question = currentTranscription.trim();
-    if (currentProviderMode !== 'byok' || codeAnswerFiredSeq === turnSeq || !needsCodeAnswer(question)) return;
-    if (codeAnswerTimer) clearTimeout(codeAnswerTimer);
-    codeAnswerTimer = setTimeout(() => {
-        codeAnswerTimer = null;
-        if (codeAnswerFiredSeq === turnSeq) return;
-        codeAnswerFiredSeq = turnSeq;
-        sendCodeAnswer(question, liveInputTurnSeq === turnSeq ? claimLiveCardForCode() : undefined);
-    }, CODE_ANSWER_DEBOUNCE_MS);
+    const fragment = currentTranscription.trim();
+    if (!textAnswersEnabled() || !fragment) return;
+    clearTimeout(answerTimer);
+    answerTimer = setTimeout(() => {
+        answerTimer = null;
+        if (lastVoiceQuestion?.turnSeq === turnSeq && lastVoiceQuestion.fragment === fragment) return;
+        lastVoiceQuestion = nextVoiceQuestion(lastVoiceQuestion, { fragment, turnSeq, now: Date.now(), newTurnId: () => createTurnId('answer') });
+        sendTextAnswer(questionText(lastVoiceQuestion), { turnId: lastVoiceQuestion.turnId });
+    }, ANSWER_DEBOUNCE_MS);
 }
 
-async function sendCodeAnswer(question, turnId) {
+async function sendTextAnswer(question, { turnId = createTurnId('answer') } = {}) {
     const apiKey = getApiKey();
     if (!apiKey || !question.trim()) return;
-    const generation = codeAnswerGeneration;
-    const answer = createAnswerStream('code', turnId ? { turnId, sequenceBase: CODE_SEQUENCE_BASE } : {});
+    // The newest question wins: older answer streams stop updating.
+    const generation = ++answerGeneration;
+    answerSequenceBase += ANSWER_SEQUENCE_STEP;
+    const answer = createAnswerStream('answer', { turnId, sequenceBase: answerSequenceBase });
     const records = [...conversationHistory, ...screenAnalysisHistory].sort((a, b) => a.timestamp - b.timestamp);
-    const context = buildRelevantContext({ query: question, summary: currentSummary, records }).slice(-CODE_ANSWER_CONTEXT_CHARS);
-    const userContext = currentCustomPrompt ? `User-provided context:\n${currentCustomPrompt}\n\n` : '';
+    const context = buildRelevantContext({ query: question, summary: currentSummary, records }).slice(-ANSWER_CONTEXT_CHARS);
     const parts = [];
     if (lastScreenshotJpeg && needsVisualContext(question)) {
         parts.push({ inlineData: { mimeType: 'image/jpeg', data: lastScreenshotJpeg } });
     }
-    parts.push({ text: `${userContext}${context ? `Conversation so far:\n${context}\n\n` : ''}Question:\n${question}` });
+    parts.push({ text: `${context ? `Conversation so far:\n${context}\n\n` : ''}Question:\n${question}` });
+    sendToRenderer('update-status', 'Answering...');
 
     try {
         const stream = await getTextModelClient(apiKey).models.generateContentStream({
-            model: CODE_ANSWER_MODEL,
+            model: ANSWER_MODEL,
             contents: [{ role: 'user', parts }],
             config: {
-                systemInstruction: CODE_ANSWER_INSTRUCTION,
+                systemInstruction: currentSystemPrompt || 'You are a helpful assistant.',
                 thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-                maxOutputTokens: 4096,
+                maxOutputTokens: ANSWER_MAX_OUTPUT_TOKENS,
             },
         });
         let text = '';
         for await (const chunk of stream) {
-            if (generation !== codeAnswerGeneration) return;
+            if (generation !== answerGeneration) return;
             if (chunk.text) {
                 text += chunk.text;
                 answer.update(text);
             }
         }
-        if (generation !== codeAnswerGeneration || !text.trim()) return;
+        if (generation !== answerGeneration || !text.trim()) return;
         answer.complete(text.trim());
         recordConversationTurn(question, text);
+        sendToRenderer('update-status', 'Listening...');
     } catch (error) {
-        console.error('Code answer failed:', error.message);
-        if (generation !== codeAnswerGeneration) return;
-        // Keep the spoken answer in its card; only report the failure.
-        sendToRenderer('update-status', `Code answer failed: ${error.message}`);
+        console.error('Text answer failed:', error.message);
+        if (generation !== answerGeneration) return;
+        liveAnswerFallbackPending = true;
+        sendToRenderer('update-status', `Answer failed: ${error.message}`);
     }
-}
-
-async function dispatchLiveTypedTurn(userText) {
-    const session = global.geminiSessionRef?.current;
-    if (!session) return false;
-    pendingTypedQuestion = userText;
-    liveTurnActive = true;
-    try {
-        await attachLastScreenshotToLive(session);
-        await session.sendRealtimeInput({ text: composeUserTurn(userText) });
-        liveTurnWatchdog.turnStarted();
-        if (needsCodeAnswer(userText)) sendCodeAnswer(userText, claimLiveCardForCode());
-        return true;
-    } catch (error) {
-        liveTurnActive = false;
-        pendingTypedQuestion = null;
-        sendToRenderer('update-status', `Could not send message: ${error.message}`);
-        dispatchNextTypedTurn();
-        return false;
-    }
-}
-
-function dispatchNextTypedTurn() {
-    if (liveTurnActive) return;
-    const next = typedTurnQueue.shift();
-    if (next) dispatchLiveTypedTurn(next);
 }
 
 function rememberScreenshot(base64Data) {
     if (base64Data && typeof base64Data === 'string' && base64Data.length > 100) {
         lastScreenshotJpeg = base64Data;
-    }
-}
-
-async function attachLastScreenshotToLive(session) {
-    if (!session || !lastScreenshotJpeg) return;
-    try {
-        session.sendRealtimeInput({
-            video: {
-                data: lastScreenshotJpeg,
-                mimeType: 'image/jpeg',
-            },
-        });
-    } catch (error) {
-        console.warn('Failed to attach last screenshot to Live session:', error.message);
     }
 }
 
@@ -1040,15 +978,13 @@ function handleLiveInterrupted() {
     awaitingLateTranscript = false;
     const input = currentTranscription.trim();
     const output = formatLiveAnswerText(liveOutputText);
-    if (output) {
+    if (output && (!textAnswersEnabled() || liveAnswerFallbackPending)) {
         if (!liveTurnId) liveTurnId = createTurnId('live');
         emitAnswer(sendToRenderer, liveTurnId, 'interrupted', output, liveOutputSequence++);
-        if (liveTurnId === codeOwnedTurnId) pendingTypedQuestion = null;
-        else saveConversationTurn(input || '(interrupted audio)', output);
+        saveConversationTurn(input || '(interrupted audio)', output);
+        liveAnswerFallbackPending = false;
     }
     resetLiveConversationBuffers();
-    liveTurnActive = false;
-    dispatchNextTypedTurn();
     sendToRenderer('update-status', 'Listening...');
 }
 
@@ -1335,7 +1271,7 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
                         return;
                     }
 
-                    if (ingestLiveInputTranscription(message)) scheduleCodeAnswerForVoiceTurn();
+                    if (ingestLiveInputTranscription(message)) scheduleAnswerForVoiceTurn();
                     ingestLiveOutputTranscription(message);
 
                     if (message.serverContent?.turnComplete) {
@@ -2088,23 +2024,11 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
             }
         }
 
-        if (!geminiSessionRef.current && canUseGroqFallback()) {
-            pendingTypedQuestion = userText;
-            const contextualText = composeUserTurn(userText);
-            sendToGroq(contextualText);
-            return { success: true };
-        }
-
-        if (!geminiSessionRef.current) return { success: false, error: 'No active Gemini session' };
-
-        if (liveTurnActive) {
-            const queued = typedTurnQueue.push(userText);
-            return queued.accepted
-                ? { success: true, queued: true, queueSize: typedTurnQueue.length }
-                : { success: false, queueFull: true, error: 'Three typed questions are already waiting.' };
-        }
-        const sent = await dispatchLiveTypedTurn(userText);
-        return sent ? { success: true } : { success: false, error: 'Could not send the message' };
+        if (!getApiKey()) return { success: false, error: 'No Gemini API key configured' };
+        // A typed question is a new topic, so later speech must not merge into an earlier spoken question.
+        lastVoiceQuestion = null;
+        sendTextAnswer(userText);
+        return { success: true };
     });
 
     ipcMain.handle('start-macos-audio', async event => {
@@ -2137,16 +2061,14 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
     ipcMain.handle('close-session', async event => {
         try {
             stopMacOSAudioCapture();
-            if (liveOutputText.trim()) {
+            if (liveOutputText.trim() && (!textAnswersEnabled() || liveAnswerFallbackPending)) {
                 if (!liveTurnId) liveTurnId = createTurnId('live');
                 emitAnswer(sendToRenderer, liveTurnId, 'interrupted', formatLiveAnswerText(liveOutputText), liveOutputSequence++);
                 saveConversationTurn(currentTranscription.trim() || '(interrupted audio)', formatLiveAnswerText(liveOutputText));
             }
             if (currentSessionId) await flushSessionArchive(currentSessionId);
-            typedTurnQueue.clear();
-            liveTurnActive = false;
             liveTurnWatchdog.stop();
-            cancelCodeAnswers();
+            cancelTextAnswers();
             resetLiveConversationBuffers();
 
             if (currentProviderMode === 'cloud') {

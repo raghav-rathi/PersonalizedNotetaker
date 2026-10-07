@@ -24,11 +24,10 @@ function fakeTimers() {
 
 function setup() {
     const timers = fakeTimers();
-    const calls = { stall: 0, noOutput: 0 };
+    const calls = { stall: 0 };
     const watchdog = new LiveTurnWatchdog({
         ...timers,
         onStall: () => calls.stall++,
-        onNoOutput: () => calls.noOutput++,
     });
     return { watchdog, calls, advance: timers.advance };
 }
@@ -45,30 +44,10 @@ test('fires a stall 3s after the last output and re-arms on more output', () => 
     assert.equal(watchdog.armed, false);
 });
 
-test('fires no-output 15s after a typed turn without any answer', () => {
+test('turnEnded cancels a pending stall', () => {
     const { watchdog, calls, advance } = setup();
-    watchdog.turnStarted();
-    advance(14999);
-    assert.equal(calls.noOutput, 0);
-    advance(1);
-    assert.equal(calls.noOutput, 1);
-});
-
-test('first output cancels the no-output timer', () => {
-    const { watchdog, calls, advance } = setup();
-    watchdog.turnStarted();
-    advance(1000);
-    watchdog.outputReceived();
-    advance(20000);
-    assert.equal(calls.noOutput, 0);
-    assert.equal(calls.stall, 1);
-});
-
-test('turnEnded cancels both timers', () => {
-    const { watchdog, calls, advance } = setup();
-    watchdog.turnStarted();
     watchdog.outputReceived();
     watchdog.turnEnded();
     advance(60000);
-    assert.deepEqual(calls, { stall: 0, noOutput: 0 });
+    assert.deepEqual(calls, { stall: 0 });
 });

@@ -16,9 +16,10 @@
         "src/utils/connectionGeneration.js",
         "src/utils/historyStore.js",
         "src/utils/answerEvents.js",
-        "src/utils/boundedTurnQueue.js",
-        "src/utils/windowBounds.js"
-        ,"src/utils/geminiLiveTransport.js"
-        ,"src/utils/diagnostics.js"
+        "src/utils/questionMerge.js",
+        "src/utils/liveTurnWatchdog.js",
+        "src/utils/windowBounds.js",
+        "src/utils/geminiLiveTransport.js",
+        "src/utils/diagnostics.js"
     ]
 }

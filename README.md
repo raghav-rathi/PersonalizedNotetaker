@@ -39,17 +39,13 @@ A real-time AI assistant that provides contextual help during video calls, inter
 4. Position the window using keyboard shortcuts
 5. The AI will provide real-time assistance based on your screen and what interview asks
 
-### Detailed interview answers
+### How answers are written (Use your API keys mode)
 
-The Job Interview profile follows the answer length and depth in **AI Context → Custom Instructions**. It does not impose a sentence limit. For long-form answers, specify the length for each question type, for example:
+Gemini Live (`gemini-3.8-live`) only listens and transcribes. Every question, spoken or typed, is answered by the text model `gemini-3.8-flash`, so answers are full written text rather than a transcript of Live's short spoken reply. Live's own reply stays hidden unless the text answer fails. If the interviewer pauses mid-question, speech that arrives within 12 seconds is treated as the same question and the answer card is rewritten.
 
-- Behavioral and situational questions: 900 to 1,050 words, roughly six to seven minutes at 150 words per minute.
-- Technical explanations: 650 to 900 words.
-- Multi-part technical walkthroughs: 900 to 1,200 words.
+Answer length, voice and content come from **AI Context → Custom Instructions**. `docs/prompts/interview-prompt.txt` is a ready-made version: two to three minutes of natural spoken English for every question (about 400 to 450 words), stories built only from the listed background facts, and a coding mode. Paste it in, then start a new session; custom instructions are loaded at session start.
 
-Include the candidate's background and distinguish confirmed experience from illustrative examples. Short answers inside reference documents are not length instructions. A separate code card does not shorten the spoken explanation.
-
-Custom instructions are loaded at session start. Replace the old context and start a new session after editing it. Restart the app after changing its built-in prompts. These word counts are generation targets, not guaranteed durations; model limits and incoming audio interruptions can still end a response early.
+Word counts are generation targets, not guarantees. Read an answer before you say it: the model can still add details that are not in your background.
 
 ## Keyboard Shortcuts
 
