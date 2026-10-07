@@ -41,7 +41,12 @@ A real-time AI assistant that provides contextual help during video calls, inter
 
 ### How answers are written (Use your API keys mode)
 
-Gemini Live (`gemini-3.8-live`) only listens and transcribes. Every question, spoken or typed, is answered by the text model `gemini-3.8-flash`, so answers are full written text rather than a transcript of Live's short spoken reply. Live's own reply stays hidden unless the text answer fails. If the interviewer pauses mid-question, speech that arrives within 12 seconds is treated as the same question and the answer card is rewritten.
+Gemini Live (`gemini-3.8-live`) only listens and transcribes. Every question, spoken or typed, is answered by a text model, so answers are full written text rather than a transcript of Live's short spoken reply:
+
+- With an **OpenRouter API key** on the main screen, GPT-6 Astra (`openai/gpt-6-astra`, low reasoning effort) writes the answers. In blind tests it gave clearly better technical answers than Gemini Flash and started a little sooner. Each answer costs about 3–4 cents; a 1.5-hour interview is roughly $3 of OpenRouter answers plus about $2 of Gemini Live listening.
+- Without that key, or when the OpenRouter request fails or shows no text within 8 seconds, `gemini-3.8-flash` answers instead.
+
+Live's own reply stays hidden unless both fail. If the interviewer pauses mid-question, speech that arrives within 12 seconds is treated as the same question and the answer card is rewritten.
 
 Answer length, voice and content come from **AI Context → Custom Instructions**. `docs/prompts/interview-prompt.txt` is a ready-made version in the voice of a mid-level engineer talking, with short sentences, contractions and plain words. Answer length fits the question: about 20 seconds to name something, under a minute for a definition, about a minute and a half for why, how and experience questions, and about two minutes for a story. It includes practiced answers for seven likely questions. It brings up your background only when the question is about you, builds stories only from the listed facts, and has a coding mode. Paste it in, then start a new session; custom instructions are loaded at session start.
 

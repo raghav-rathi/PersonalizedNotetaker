@@ -49,6 +49,7 @@ git fetch upstream
 | `src/utils/geminiLiveSessionConfig.js`, `src/utils/geminiLiveTransport.js` | Live setup message and the raw WebSocket transport.                                                                                                            |
 | `src/utils/liveAudioGapFiller.js`, `src/utils/liveTurnWatchdog.js`         | Keep Gemini 3.8 Live turns closing (see cause B4).                                                                                                             |
 | `src/utils/questionMerge.js`                                               | Joins a spoken question that Live split at a pause, so it gets one answer card.                                                                                |
+| `src/utils/answerModel.js`                                                 | Streams answers from GPT-6 Astra through OpenRouter, with the fallback to Gemini Flash.                                                                        |
 | `src/utils/renderer.js`                                                    | Renderer glue loaded by `index.html`. Storage wrappers, provider start, audio capture (`startCapture`, line 691), screenshots, the `window.cheatingDaddy` API. |
 | `src/audio-worklet.js`                                                     | AudioWorklet that turns captured audio into 40 ms 16-bit frames.                                                                                               |
 | `src/components/**`                                                        | Lit UI. `CheatingDaddyApp.js` is the root and starts meetings. `MainView.js` is the start screen.                                                              |
@@ -61,7 +62,7 @@ The window uses `nodeIntegration: true` and `contextIsolation: false`. Renderer 
 ### 3.2 AI modes
 
 - `cloud`: the cheatingdaddy.com invite-code service. The code falls back to this mode when no `providerMode` is saved (cause B1).
-- `byok` ("Use your API keys"): Gemini Live `gemini-3.8-live` over `wss://generativelanguage.googleapis.com/...` listens and transcribes. Every answer, spoken or typed, comes from the text model `gemini-3.8-flash` (`sendTextAnswer` in `gemini.js`), using the full system prompt, which includes the custom instructions. Live's own spoken reply is hidden unless the text answer fails. A spoken question that arrives within 12 s of the previous one is merged with it and re-answered in the same card (`questionMerge.js`). Screen analysis also uses `gemini-3.8-flash`. An optional Groq key is only used when there is no Live session.
+- `byok` ("Use your API keys"): Gemini Live `gemini-3.8-live` over `wss://generativelanguage.googleapis.com/...` listens and transcribes. Every answer, spoken or typed, comes from a text model (`sendTextAnswer` in `gemini.js`) using the full system prompt, which includes the custom instructions: GPT-6 Astra (`openai/gpt-6-astra`, low effort) through OpenRouter when `openrouterKey` is saved (`answerModel.js`), otherwise `gemini-3.8-flash`. If the OpenRouter request fails or shows no text within 8 s, Gemini Flash answers instead; an answer replaced by a newer question has its request cancelled. Live's own spoken reply is hidden unless both fail. A spoken question that arrives within 12 s of the previous one is merged with it and re-answered in the same card (`questionMerge.js`). Screen analysis also uses `gemini-3.8-flash`. An optional Groq key is only used when there is no Live session.
 
     Why: every Live model can only answer by speaking, so the overlay used to show a short transcript of speech. In a 2026-10-07 comparison with the same prompt, Live models gave 114 to 367 words, `gemini-3.8-flash` gave 365 to 412 words with more depth, and `gemini-3.1-pro-preview` took 13 to 18 s to start. `gemini-3.8-live-extended-thinking` refuses this app's setup unless `thinkingConfig` is set and the `search_meeting` tool is `NON_BLOCKING`.
 
@@ -88,9 +89,9 @@ Windows (never run on Windows):
 
 ### 3.4 Where data lives on Windows
 
-- Settings: `%APPDATA%\cheating-daddy-config\` (`config.json`, `credentials.json`, `preferences.json`, `keybinds.json`, `limits.json`, `history\`). `credentials.json` holds API keys in plain text. Never commit or upload it.
+- Settings: `%APPDATA%\cheating-daddy-config\` (`config.json`, `credentials.json`, `preferences.json`, `keybinds.json`, `limits.json`, `history\`). `credentials.json` holds API keys in plain text (`apiKey` for Gemini, `openrouterKey`, `groqApiKey`). Never commit or upload it.
 - Performance diagnostics: `app.getPath('logs')\diagnostics\performance.jsonl`, normally `%APPDATA%\cheating-daddy\logs\diagnostics\` in a dev run. A line is written every 15 s and includes `global.getMeetingDiagnostics()` (`gemini.js:246`): provider mode, audio queue, `audioGapsFilled`, `liveUnansweredTurns`, `liveStalledTurns`.
-- Settings are per machine. On a new Windows PC, enter the Gemini key and paste the custom prompt again.
+- Settings are per machine. On a new Windows PC, enter the Gemini and OpenRouter keys and paste the custom prompt again.
 
 ## 4. Windows investigation (2026-10-06)
 
@@ -409,6 +410,13 @@ Commits on top of Rohit's `8c49d85`:
     - Results with the final prompt, two samples each: median words were 62 to name something, 166 for definitions, 190 for why questions, 146 for experience questions, 92 for follow-ups and 220 for stories. Answers about general topics never mentioned the owner's background (0 of 44). In the last review round, 9% of tuning answers and 14% of held-back answers were flagged for an invented detail, down from 25% in the first round. In the real app, the five likely questions and two quick questions spoken back to back with simulated reading time gave seven separate cards, with first text 3.7 to 5.5 s after the question ended. The 12 s question-merge window did not join any of them.
     - Remaining issues: experience questions with few listed facts get 80 to 160 words, some definitions reach about 190 words, longer answers still contain a list of three about 40% of the time, and follow-ups about the owner's own work sometimes add a reason or setting that isn't in his facts.
 
+8. 2026-10-07 `feat: answer with GPT-6 Astra through OpenRouter`.
+    - What: when an OpenRouter key is saved (new field on the main screen, stored as `openrouterKey`), `sendTextAnswer` streams the answer from `openai/gpt-6-astra` at low reasoning effort through OpenRouter's chat completions API (`src/utils/answerModel.js`). Gemini Live still listens. If OpenRouter fails or shows no text within 8 s, `gemini-3.8-flash` answers instead; if both fail, Live's spoken answer is shown as before. A request whose answer was replaced by a newer question is cancelled, so it stops being billed. The main screen's unused OpenAI key field was replaced by the OpenRouter field.
+    - Why: the owner said the answers themselves were not good enough. Thinking longer did not help Gemini: on 12 interview questions, a blind grader scored `gemini-3.8-flash` at LOW and MEDIUM, `gemini-3.7-flash` and `gemini-3.1-pro-preview` about the same, and the slower ones took 19 to 66 s to start.
+    - Model choice: the same 12 questions with the real prompt, graded blind by three judges from different companies (Claude Opus 5.5, GPT-6.1 Sol, Gemini 3.8 Flash). Each candidate was compared with the current model in both orders. GPT-6 Astra was preferred in 83% of comparisons (every judge, including Gemini's), GPT-6.1 Sol in 72% and Claude Sonnet 5.5 in 62%, while GPT-6 Luna lost every comparison. Through OpenRouter, Astra's first text took 1.7 s (median) and 2.6 s (p90), against 3.1 s and 5.7 s for Gemini Flash that day.
+    - Cost: each Astra answer cost $0.025 to $0.041 in the real app. A 1.5-hour interview is about $3 of answers plus about $2 of Gemini Live listening (measured at 2 to 4 cents per interviewer turn, because Live re-bills the 12,600-token prompt every turn and speaks a hidden 30 s reply).
+    - Tests: 10 new unit tests in `answerModel.test.js` (stream parsing across chunk boundaries, cost reporting, a failure mid-stream, a rejected key, screenshot attachment, the fallback cases, the first-text timeout and cancellation). In the real app, five spoken interview questions, one more spoken question and one typed question were all answered by Astra, one card each, with first text 2.7 to 6.0 s after the question ended. With an invalid OpenRouter key, Gemini answered both test questions and the log recorded the 401.
+
 Not in git (Mac only): the owner's `preferences.json` and API keys, backups of older prompts (`preferences.backup-before-ste-prompt.json`, `preferences.backup-before-humanistic-prompt.json`), and the downloaded Electron binary.
 
 No app code was changed to fix Windows. Change 5 changes how answers are written on every platform, not a Windows fix. The exact Windows symptom is unknown, and none of these fixes can be tested on a Mac. The plan is to confirm the cause on the Windows PC first, then apply only the fixes it needs.
@@ -416,7 +424,7 @@ No app code was changed to fix Windows. Change 5 changes how answers are written
 ## 8. Commands, tests and conventions
 
 - Install: `npm ci`. Run: `npm start`. Package: `npm run package`. Installer: `npm run make` (the Squirrel Setup.exe must be built on Windows).
-- Unit tests: `npm test` (`node --test src/**/*.test.js`). 65 tests, all passing on macOS on 2026-10-07. Node 22+ expands the glob itself, so it also works from cmd and PowerShell.
+- Unit tests: `npm test` (`node --test src/**/*.test.js`). 75 tests, all passing on macOS on 2026-10-07. Node 22+ expands the glob itself, so it also works from cmd and PowerShell.
 - Electron smoke tests: `npm run test:electron` and `npm run test:windows` (Playwright `_electron`; they launch the app from source and check that the window renders and can hide and restore; the Windows one is skipped elsewhere). Neither has run on Windows yet.
 - Type check: `npm run typecheck` (`tsc -p jsconfig.performance.json`).
 - Format only the files you change: `npx prettier --write <files>`. Settings are in `.prettierrc`: 4-space indent, print width 150, semicolons, single quotes. `src/assets` and `node_modules` are ignored.
@@ -452,3 +460,4 @@ Add an entry after each session: date, machine, what you ran, what you saw, what
 - 2026-10-07, Mac: answers now come from `gemini-3.8-flash` with the new interview prompt (section 7, change 5). Tested end to end on the Mac with spoken and typed questions. Not yet run on Windows.
 - 2026-10-07, Mac: plain-voice prompt and profile text (section 7, change 6). Tested with a 12-question battery and in the real app. Not yet run on Windows.
 - 2026-10-07, Mac: answer length now depends on the question (section 7, change 7). Tested with 30 interview questions, three simulated interviewer reviews and the real app. Not yet run on Windows.
+- 2026-10-07, Mac: answers come from GPT-6 Astra through OpenRouter with a Gemini fallback (section 7, change 8). Tested end to end on the Mac, including the fallback. Not yet run on Windows; the OpenRouter key must be entered there.
