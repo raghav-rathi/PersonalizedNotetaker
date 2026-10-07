@@ -417,6 +417,11 @@ Commits on top of Rohit's `8c49d85`:
     - Cost: each Astra answer cost $0.025 to $0.041 in the real app. A 1.5-hour interview is about $3 of answers plus about $2 of Gemini Live listening (measured at 2 to 4 cents per interviewer turn, because Live re-bills the 12,600-token prompt every turn and speaks a hidden 30 s reply).
     - Tests: 10 new unit tests in `answerModel.test.js` (stream parsing across chunk boundaries, cost reporting, a failure mid-stream, a rejected key, screenshot attachment, the fallback cases, the first-text timeout and cancellation). In the real app, five spoken interview questions, one more spoken question and one typed question were all answered by Astra, one card each, with first text 2.7 to 6.0 s after the question ended. With an invalid OpenRouter key, Gemini answered both test questions and the log recorded the 401.
 
+9. 2026-10-07 `docs: shorten interview answers by about a fifth`.
+    - What: the length targets in `docs/prompts/interview-prompt.txt` went down about 25% (naming something 30 to 60 words, definition 80 to 120, why/how and experience 150 to 200, scenario 170 to 230, story 200 to 280, tell me about yourself 160 to 220), and the practiced answers were trimmed to match.
+    - Why: the owner asked for slightly shorter answers.
+    - Tests: the same 14 interview questions answered by GPT-6 Astra before and after. Total length went from 3,048 to 2,417 words (21% shorter), and 13 of 14 answers landed inside their new range.
+
 Not in git (Mac only): the owner's `preferences.json` and API keys, backups of older prompts (`preferences.backup-before-ste-prompt.json`, `preferences.backup-before-humanistic-prompt.json`), and the downloaded Electron binary.
 
 No app code was changed to fix Windows. Change 5 changes how answers are written on every platform, not a Windows fix. The exact Windows symptom is unknown, and none of these fixes can be tested on a Mac. The plan is to confirm the cause on the Windows PC first, then apply only the fixes it needs.
