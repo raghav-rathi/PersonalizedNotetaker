@@ -5,7 +5,7 @@ const LIVE_ALWAYS_RESPOND_INSTRUCTION =
 
 // Spoken answers cannot carry indented code, so code is written by a text model in a separate card.
 const LIVE_CODE_HANDOFF_INSTRUCTION =
-    'When a question asks for code, do not read code aloud. Give the approach in two or three short sentences; the full code is shown to the user separately.';
+    'When a question asks for code, do not read source code aloud. Explain the approach, reasoning, tradeoffs and validation at the depth requested by the active profile and user instructions; the full code is shown separately. A separate code card is not a reason to shorten the explanatory answer.';
 
 function isLiveServerInterrupt(message) {
     return Boolean(message?.serverContent?.interrupted);
