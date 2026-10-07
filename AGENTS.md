@@ -6,7 +6,7 @@ Last updated: 2026-10-06, on the owner's Mac (macOS arm64). Next step: the owner
 
 ## 1. Status
 
-- The app works on macOS. A "Use your API keys" (BYOK) session with Gemini Live (`gemini-3.8-live`) captures system audio and shows answers.
+- The app works on macOS. A "Use your API keys" (BYOK) session captures system audio, Gemini Live (`gemini-3.8-live`) transcribes it, and `gemini-3.8-flash` writes every answer (section 3.2).
 - The app does not work on Windows. Nobody has observed the exact Windows symptom yet. It could fail at install, at launch, at session start, or later by never answering.
 - No Windows code fix has been applied yet. This was deliberate. Confirm which failure happens on the real machine, then apply the matching fix from section 6.
 - Your job on Windows: follow the runbook in section 5, identify the failing stage, apply the matching fix, verify it, commit it, and add an entry to the status log in section 11.
@@ -45,9 +45,10 @@ git fetch upstream
 | `src/utils/window.js`                                                      | Creates the BrowserWindow, the screen-capture request handler (line 149), content protection, Windows z-order and taskbar handling, global shortcuts.          |
 | `src/utils/overlayVisibility.js`                                           | Per-platform window helpers: opaque window on Windows, Alt as the Windows hide key.                                                                            |
 | `src/utils/optionTapMonitor.js`                                            | Global Alt/Option tap detection through the native module `uiohook-napi`.                                                                                      |
-| `src/utils/gemini.js`                                                      | About 2,200 lines. Gemini Live session, audio routing, macOS SystemAudioDump, turn handling, every session IPC handler.                                        |
+| `src/utils/gemini.js`                                                      | About 2,100 lines. Gemini Live session, text answers (`sendTextAnswer`), audio routing, macOS SystemAudioDump, turn handling, every session IPC handler.       |
 | `src/utils/geminiLiveSessionConfig.js`, `src/utils/geminiLiveTransport.js` | Live setup message and the raw WebSocket transport.                                                                                                            |
 | `src/utils/liveAudioGapFiller.js`, `src/utils/liveTurnWatchdog.js`         | Keep Gemini 3.8 Live turns closing (see cause B4).                                                                                                             |
+| `src/utils/questionMerge.js`                                               | Joins a spoken question that Live split at a pause, so it gets one answer card.                                                                                |
 | `src/utils/renderer.js`                                                    | Renderer glue loaded by `index.html`. Storage wrappers, provider start, audio capture (`startCapture`, line 691), screenshots, the `window.cheatingDaddy` API. |
 | `src/audio-worklet.js`                                                     | AudioWorklet that turns captured audio into 40 ms 16-bit frames.                                                                                               |
 | `src/components/**`                                                        | Lit UI. `CheatingDaddyApp.js` is the root and starts meetings. `MainView.js` is the start screen.                                                              |
@@ -60,7 +61,10 @@ The window uses `nodeIntegration: true` and `contextIsolation: false`. Renderer 
 ### 3.2 AI modes
 
 - `cloud`: the cheatingdaddy.com invite-code service. The code falls back to this mode when no `providerMode` is saved (cause B1).
-- `byok` ("Use your API keys"): Gemini Live `gemini-3.8-live` over `wss://generativelanguage.googleapis.com/...`. Screen analysis and code cards use `gemini-3.8-flash`. An optional Groq key is only used when there is no Live session.
+- `byok` ("Use your API keys"): Gemini Live `gemini-3.8-live` over `wss://generativelanguage.googleapis.com/...` listens and transcribes. Every answer, spoken or typed, comes from the text model `gemini-3.8-flash` (`sendTextAnswer` in `gemini.js`), using the full system prompt, which includes the custom instructions. Live's own spoken reply is hidden unless the text answer fails. A spoken question that arrives within 12 s of the previous one is merged with it and re-answered in the same card (`questionMerge.js`). Screen analysis also uses `gemini-3.8-flash`. An optional Groq key is only used when there is no Live session.
+
+    Why: every Live model can only answer by speaking, so the overlay used to show a short transcript of speech. In a 2026-10-07 comparison with the same prompt, Live models gave 114 to 367 words, `gemini-3.8-flash` gave 365 to 412 words with more depth, and `gemini-3.1-pro-preview` took 13 to 18 s to start. `gemini-3.8-live-extended-thinking` refuses this app's setup unless `thinkingConfig` is set and the `search_meeting` tool is `NON_BLOCKING`.
+
 - `local`: Ollama plus Whisper through `@huggingface/transformers`.
 
 ### 3.3 Audio: macOS and Windows use different code
@@ -69,15 +73,15 @@ This is the most important fact for the Windows problem. The working Mac setup n
 
 ```text
 macOS (works):
-  SystemAudioDump binary (24 kHz stereo) -> main: startMacOSAudioCapture (gemini.js:1509)
+  SystemAudioDump binary (24 kHz stereo) -> main: startMacOSAudioCapture (gemini.js:1445)
       -> enqueueLivePcm -> Gemini Live
-  plus liveGapFiller.start() (gemini.js:1544), which adds a low noise floor when frames stop
+  plus liveGapFiller.start() (gemini.js:1480), which adds a low noise floor when frames stop
 
 Windows (never run on Windows):
   renderer: getLoopbackStream() -> navigator.mediaDevices.getDisplayMedia (renderer.js:633)
       -> main: setDisplayMediaRequestHandler -> { video: sources[0], audio: 'loopback' } (window.js:149)
       -> AudioContext + AudioWorklet (renderer.js:650, src/audio-worklet.js)
-      -> IPC 'send-audio-frame' -> validateAudioFrame -> routeAudioFrame (gemini.js:1819)
+      -> IPC 'send-audio-frame' -> validateAudioFrame -> routeAudioFrame (gemini.js:1755)
       -> enqueueLivePcm -> Gemini Live
   no gap filler
 ```
@@ -85,7 +89,7 @@ Windows (never run on Windows):
 ### 3.4 Where data lives on Windows
 
 - Settings: `%APPDATA%\cheating-daddy-config\` (`config.json`, `credentials.json`, `preferences.json`, `keybinds.json`, `limits.json`, `history\`). `credentials.json` holds API keys in plain text. Never commit or upload it.
-- Performance diagnostics: `app.getPath('logs')\diagnostics\performance.jsonl`, normally `%APPDATA%\cheating-daddy\logs\diagnostics\` in a dev run. A line is written every 15 s and includes `global.getMeetingDiagnostics()` (`gemini.js:259`): provider mode, audio queue, `audioGapsFilled`, `liveUnansweredTurns`, `liveStalledTurns`, `liveNoOutputTurns`.
+- Performance diagnostics: `app.getPath('logs')\diagnostics\performance.jsonl`, normally `%APPDATA%\cheating-daddy\logs\diagnostics\` in a dev run. A line is written every 15 s and includes `global.getMeetingDiagnostics()` (`gemini.js:246`): provider mode, audio queue, `audioGapsFilled`, `liveUnansweredTurns`, `liveStalledTurns`.
 - Settings are per machine. On a new Windows PC, enter the Gemini key and paste the custom prompt again.
 
 ## 4. Windows investigation (2026-10-06)
@@ -149,9 +153,9 @@ B3. Windows loopback records only the default playback device. Possible.
 B4. Turn ending only works on Mac. Possible, unverified.
 
 - `src/utils/liveAudioGapFiller.js:1-3` says Gemini 3.8 Live only closes a turn while trailing audio keeps arriving, ignores `audioStreamEnd`, and that digital zeros are avoided on purpose.
-- Commit `9043400` removed the old `audioStreamEnd` signal, which ran on all platforms, and added the gap filler. The filler only starts in the Mac path (`gemini.js:1544`).
+- Commit `9043400` removed the old `audioStreamEnd` signal, which ran on all platforms, and added the gap filler. The filler only starts in the Mac path (`gemini.js:1480`).
 - On Windows the AudioWorklet keeps sending a frame every 40 ms, and silence arrives as exact zeros (confirmed in the harness). If Gemini does not close a turn on zeros, Windows transcribes the question but never answers.
-- `liveTurnWatchdog` only covers typed questions and answers that start and then stall. It does not cover spoken turns that never close.
+- Since 2026-10-07, answers are triggered by Live's input transcription, not by Live finishing its own reply, which lowers this risk. Input transcription still waits for Live to detect the end of speech, so the risk is not gone.
 - Fix: F5. Apply it only after confirming the symptom (runbook 5.6).
 
 B5. Audio failures are hidden.
@@ -168,7 +172,7 @@ B5. Audio failures are hidden.
 - In "Both Speaker and Microphone" mode the worklet averages the two sources, which halves each level (`src/audio-worklet.js:15-16`).
 - The main-process WebSockets ignore the Windows system proxy. On a corporate network that requires a proxy, the Live socket cannot open.
 - IPC handlers are registered after the tray and diagnostics start (`src/index.js:113-118`). If either throws, the window loads but every IPC call fails.
-- All platforms: `gemma-3-27b-it` is retired (upstream `998a056` renamed it to `gemma-4-26b-a4b-it`). It is still used at `gemini.js:933,954` and `src/storage.js:40,315,335`, only in the non-Live Gemma fallback. Fix: F8.
+- All platforms: `gemma-3-27b-it` is retired (upstream `998a056` renamed it to `gemma-4-26b-a4b-it`). It is still used at `gemini.js:871,892` and `src/storage.js:40,315,335`, only in the non-Live Gemma fallback. Fix: F8.
 
 ### 4.6 Checked and fine (do not re-investigate)
 
@@ -244,7 +248,7 @@ Quick A1 check without changing code: `npx electron .` starts the app without Fo
 
 1. On the start screen, check the title. "Cheating Daddy Cloud" means cause B1. Click "Use your API keys".
 2. Paste the Gemini API key.
-3. Open AI Context, then Custom Instructions, and paste `docs/prompts/interview-prompt-ste100.txt`.
+3. Open AI Context, then Custom Instructions, and paste `docs/prompts/interview-prompt.txt`.
 4. Leave Settings, Audio Mode on "Speaker Only (Interviewer)".
 5. Press the Start button or Ctrl+Enter.
 
@@ -273,7 +277,7 @@ Another option: start with `npx electron . --remote-debugging-port=9222` and ope
 2. Play a recorded interview question, for example a YouTube video, through those speakers.
 3. To see what reaches Gemini, temporarily add logs. Do not commit them.
     - In `ingestLiveInputTranscription` (`gemini.js:123`): `console.log('[live input]', incoming);`
-    - In `routeAudioFrame` (`gemini.js:1819`): count frames whose samples are all zero, and log the count every 100 frames.
+    - In `routeAudioFrame` (`gemini.js:1755`): count frames whose samples are all zero, and log the count every 100 frames.
 4. Read the result:
     - Every frame is zero while audio plays: B3. Fix the device routing.
     - Input transcription appears, but no answer and no "Saved conversation turn" line: B4. Apply F5.
@@ -344,8 +348,8 @@ async function getLoopbackStream(sampleRate, timeoutMs = 8000) {
 
 F5 (B4, only if confirmed). Make turn ending work on every platform.
 
-1. Start the filler when a BYOK Live session starts. In the `initialize-gemini` handler (`gemini.js:1861`), after `geminiSessionRef.current = session;`, add `liveGapFiller.start();`. `close-session` already stops it through `stopMacOSAudioCapture()`, which has no platform check.
-2. In `routeAudioFrame` (`gemini.js:1819`), do not forward frames that are exact digital silence. The filler then sees a gap and sends its noise floor.
+1. Start the filler when a BYOK Live session starts. In the `initialize-gemini` handler (`gemini.js:1797`), after `geminiSessionRef.current = session;`, add `liveGapFiller.start();`. `close-session` already stops it through `stopMacOSAudioCapture()`, which has no platform check.
+2. In `routeAudioFrame` (`gemini.js:1755`), do not forward frames that are exact digital silence. The filler then sees a gap and sends its noise floor.
 
 ```js
 function isDigitalSilence(pcm) {
@@ -364,7 +368,7 @@ F6 (B5). Make audio failures visible. When `startCapture` ends with no `system` 
 
 F7. Local mode on Windows: `device: process.platform === 'win32' ? 'cpu' : 'auto'` in `src/utils/localai.js:184`.
 
-F8. Replace `gemma-3-27b-it` with `gemma-4-26b-a4b-it` in `src/utils/gemini.js` (lines 933 and 954) and `src/storage.js` (lines 40, 315 and 335).
+F8. Replace `gemma-3-27b-it` with `gemma-4-26b-a4b-it` in `src/utils/gemini.js` (lines 871 and 892) and `src/storage.js` (lines 40, 315 and 335).
 
 Optional: stop the unused video track right after `getLoopbackStream` resolves: `mediaStream.getVideoTracks().forEach(track => track.stop())`.
 
@@ -377,22 +381,27 @@ Commits on top of Rohit's `8c49d85`:
 1. `e310efb feat: let custom instructions set interview answer length` (`README.md`, `src/utils/prompts.js`, `src/utils/geminiLiveSessionConfig.js`). These edits were already uncommitted in the Mac working copy before the Windows investigation. They were committed unchanged.
     - What: the Job Interview profile no longer forces answers of 1 to 3 sentences and follows the length in Custom Instructions. The code-card instruction no longer tells Gemini to keep the spoken answer to "two or three short sentences". The README explains how to ask for long answers.
     - Why: the owner wants long spoken answers, about 6 to 7 minutes for behavioral questions.
-2. `6cab7a2 docs: add long-answer ASD-STE100 interview prompt` (`docs/prompts/interview-prompt-ste100.txt`, 1,207 words).
+2. `6cab7a2 docs: add long-answer ASD-STE100 interview prompt` (`docs/prompts/interview-prompt-ste100.txt`, 1,207 words). Replaced on 2026-10-07 by change 5.
     - What: the owner's custom instructions. They ask for long answers (13 to 14 paragraphs for behavioral questions), ASD-STE100 Simplified Technical English, a six-part story structure and truth rules, and they map the owner's resume stories to common behavioral questions.
     - Why: answers were too short. The previous 67,792-word custom prompt told the model to use 180 to 350 words, and its appendix said 60 to 120 seconds. It was also too large for the live model to follow.
     - Results on the Mac: with earlier, longer versions of this prompt, direct Gemini Live tests gave behavioral answers of 377, 716, 889, 685 and 511 words. They did not reliably reach 900 words, and some included details that are not in the owner's record. In a real session with this final version, technical questions got answers of 90 to 150 words, because its length rules only cover behavioral questions. The STE rules are only partly followed.
     - The app stores it in `preferences.json` (`customPrompt`). Paste it into AI Context, Custom Instructions on each new machine.
 3. `134f5ff docs: add raw Windows investigation reports` (`docs/windows-investigation/*.json`).
 4. `docs: rewrite AGENTS.md as Windows handover` (this file). The previous AGENTS.md said there were no automated tests and presented React, shadcn and TypeScript rules as current. Both were out of date. Its long-term plans are kept in section 10.
+5. 2026-10-07 `feat: answer every question with gemini-3.8-flash` and `docs: replace interview prompt with a long, natural-voice version`.
+    - What: in BYOK mode every question goes to `gemini-3.8-flash` (section 3.2). The old code-only card, the typed-question queue (`boundedTurnQueue.js`), the "no answer for a typed turn" timer and the `needsCodeAnswer` heuristic were removed, because every question now gets a text answer. Typed questions go straight to the text model. `docs/prompts/interview-prompt.txt` (3,434 words) replaces the STE prompt.
+    - Why: the owner wants two to three minutes of natural, human-sounding speech for every question. Live's spoken answers were 114 to 367 words and sounded scripted.
+    - Prompt rules: 400 to 450 words for every real question (never under 370), contractions and plain speech, no bullet lists, banned resume and AI phrases, stories told only from listed facts with "Not in my facts" notes per story, a present-tense "how I usually work" pattern for missing details, no invented disagreement or mistake stories, placeholders for "why are you leaving" and strengths and weaknesses, and the owner's coding mode (SAY / CODE / LINE COACH / COMPLEXITY).
+    - Tests on the Mac: a 13-question prompt battery gave 335 to 537 words for every real question, with no bullet lists or dashes. In the real app, spoken and typed questions got 391 to 534-word answers, and the first text showed 2.4 to 4 s after the question ended. A question spoken in two parts with a 2.5 s pause was merged into one 399-word answer in one card. "Can you hear me?" got one short sentence. Remaining issue: the model still sometimes adds details that are not in the owner's facts, so answers must be read before they are spoken.
 
-Not in git (Mac only): the owner's `preferences.json` and API keys, a backup of the old prompt (`preferences.backup-before-ste-prompt.json`), and the downloaded Electron binary.
+Not in git (Mac only): the owner's `preferences.json` and API keys, backups of older prompts (`preferences.backup-before-ste-prompt.json`, `preferences.backup-before-humanistic-prompt.json`), and the downloaded Electron binary.
 
-No app code was changed to fix Windows. The exact Windows symptom is unknown, and none of these fixes can be tested on a Mac. The plan is to confirm the cause on the Windows PC first, then apply only the fixes it needs.
+No app code was changed to fix Windows. Change 5 changes how answers are written on every platform, not a Windows fix. The exact Windows symptom is unknown, and none of these fixes can be tested on a Mac. The plan is to confirm the cause on the Windows PC first, then apply only the fixes it needs.
 
 ## 8. Commands, tests and conventions
 
 - Install: `npm ci`. Run: `npm start`. Package: `npm run package`. Installer: `npm run make` (the Squirrel Setup.exe must be built on Windows).
-- Unit tests: `npm test` (`node --test src/**/*.test.js`). 66 tests, all passing on macOS on 2026-10-06. Node 22+ expands the glob itself, so it also works from cmd and PowerShell.
+- Unit tests: `npm test` (`node --test src/**/*.test.js`). 65 tests, all passing on macOS on 2026-10-07. Node 22+ expands the glob itself, so it also works from cmd and PowerShell.
 - Electron smoke tests: `npm run test:electron` and `npm run test:windows` (Playwright `_electron`; they launch the app from source and check that the window renders and can hide and restore; the Windows one is skipped elsewhere). Neither has run on Windows yet.
 - Type check: `npm run typecheck` (`tsc -p jsconfig.performance.json`).
 - Format only the files you change: `npx prettier --write <files>`. Settings are in `.prettierrc`: 4-space indent, print width 150, semicolons, single quotes. `src/assets` and `node_modules` are ignored.
@@ -425,3 +434,4 @@ These come from the previous AGENTS.md and still apply to future work:
 Add an entry after each session: date, machine, what you ran, what you saw, what you changed.
 
 - 2026-10-06, Mac (macOS arm64): investigation done, no Windows run yet. The app works on the Mac with BYOK `gemini-3.8-live`. Next: run section 5 on the Windows PC, starting with 5.1 and 5.2.
+- 2026-10-07, Mac: answers now come from `gemini-3.8-flash` with the new interview prompt (section 7, change 5). Tested end to end on the Mac with spoken and typed questions. Not yet run on Windows.
