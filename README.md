@@ -43,10 +43,26 @@ A real-time AI assistant that provides contextual help during video calls, inter
 
 Gemini Live (`gemini-3.8-live`) only listens and transcribes. Every question, spoken or typed, is answered by a text model, so answers are full written text rather than a transcript of Live's short spoken reply:
 
-- With an **OpenRouter API key** on the main screen, GPT-6 Astra (`openai/gpt-6-astra`, low reasoning effort) writes the answers. In blind tests it gave clearly better technical answers than Gemini Flash and started a little sooner. Each answer costs about 3 cents; a 1.5-hour interview is roughly $3 of OpenRouter answers plus about $2 of Gemini Live listening.
-- Without that key, or when the OpenRouter request fails or shows no text within 8 seconds, `gemini-3.8-flash` answers instead.
+- With an **OpenRouter API key** on the main screen, the model picked under **Answer Model** writes the answers. A change applies from the next session.
+    - **GPT-6 Astra** (`openai/gpt-6-astra`, low reasoning effort, the default). In blind tests it gave clearly better technical answers than Gemini Flash. Its first words show after about 1.4 seconds, and an answer costs about 2.5 cents.
+    - **Claude Opus 5.5** (`anthropic/claude-opus-5.5`, medium reasoning effort). It thinks before it writes, so its first words show after about 5 seconds, and slow ones take up to 14 to 21 seconds. An answer costs about 1.5 cents.
+    - **GPT-6.1 Sol** (`openai/gpt-6.1-sol`, low reasoning effort), the cheapest, for testing.
+- Without that key, or when the OpenRouter request fails or shows no text in time (8 seconds, or 20 for Opus), `gemini-3.8-flash` answers instead.
 
-Live's own reply stays hidden unless both fail. If the interviewer pauses mid-question, speech that arrives within 12 seconds is treated as the same question and the answer card is rewritten.
+Live's own reply stays hidden unless both fail. If the interviewer pauses mid-question, speech that arrives within 12 seconds is treated as the same question, but only while its answer is still empty or less than 5 seconds old. After that, new speech is a new question, so the answer you are reading never changes under you.
+
+### Two answer screens
+
+The overlay has a **Main** screen and a **Follow-ups** screen, with tabs in the top bar. Main answers stay on Main. When the interviewer asks a follow-up or counter-question, a short answer appears on Follow-ups and the overlay jumps there. `Cmd+Option+Left` goes back to Main, to the same answer and scroll position, and `Cmd+Option+Right` opens Follow-ups again. Remarks such as "okay" or "mm-hmm" get no answer.
+
+### Coding mode
+
+For a DSA coding round, put the problem on screen and press `Cmd+Option+1`. The app takes a screenshot and walks you through the problem the way `src/prompts/dsa-coding-skill.md` describes. Part 1 restates the problem, asks questions and gives the simple version. Part 2 gives the better approach. Then the code comes one step at a time.
+
+- `Cmd+Option+2` Part 2, `Cmd+Option+3` start coding, `Cmd+Option+4` next step, `Cmd+Option+5` full code, `Cmd+Option+6` dry run, `Cmd+Option+9` exit.
+- Typing `new problem` followed by the problem text also starts it, and typing `exit` leaves. Anything else you type goes to the model as an instruction.
+- What the interviewer says is passed on automatically. "Can you do better?" and "go ahead and code it" move the main screen forward. Other questions get a short answer on Follow-ups. If one of them changes code you already typed, the changed step appears on Main, marked "Changed after ...", and your place stays where it was.
+- Analyze Screen in coding mode sends the screenshot into the same conversation, for example to check your code or a failing test.
 
 Answer length, voice and content come from **AI Context → Custom Instructions**. `docs/prompts/interview-prompt.txt` is a ready-made version in the voice of a mid-level engineer talking, with short sentences, contractions and plain words. Answer length fits the question: 10 to 20 seconds to name something, about 40 seconds for a definition, about a minute for why, how and experience questions, and about a minute and a half for a story. It includes practiced answers for seven likely questions. It brings up your background only when the question is about you, builds stories only from the listed facts, and has a coding mode. Paste it in, then start a new session; custom instructions are loaded at session start.
 
@@ -56,9 +72,12 @@ Word counts are generation targets, not guarantees. Read an answer before you sa
 
 ## Keyboard Shortcuts
 
-- **Window Movement**: `Ctrl/Cmd + Arrow Keys` - Move window
+- **Window Movement**: `Option + Arrow Keys` on Mac, `Ctrl + Arrow Keys` on Windows - Move window
 - **Click-through**: `Ctrl/Cmd + M` - Toggle mouse events
-- **Close/Back**: `Ctrl/Cmd + \` - Close window or go back
+- **Show or hide**: `Cmd + \` on Mac, or tap `Option`/`Alt` on its own
+- **Analyze Screen**: `Ctrl/Cmd + Enter`. While the app runs this works in every app, so don't use it to send messages elsewhere.
+- **Main / Follow-ups screen**: `Cmd + Option + Left/Right` on Mac, `Alt + Shift + Left/Right` on Windows
+- **Coding mode**: `Cmd + Option + 1-6, 9` on Mac, `Alt + Shift + 1-6, 9` on Windows (see Coding mode)
 - **Send Message**: `Enter` - Send text to AI
 
 ## Audio Capture
