@@ -311,6 +311,15 @@ export class CustomizeView extends LitElement {
             nextResponse: isMac ? 'Cmd+]' : 'Ctrl+]',
             scrollUp: isMac ? 'Cmd+Shift+Up' : 'Ctrl+Shift+Up',
             scrollDown: isMac ? 'Cmd+Shift+Down' : 'Ctrl+Shift+Down',
+            showMainAnswers: isMac ? 'Cmd+Alt+Left' : 'Alt+Shift+Left',
+            showFollowUps: isMac ? 'Cmd+Alt+Right' : 'Alt+Shift+Right',
+            codingNewProblem: isMac ? 'Cmd+Alt+1' : 'Alt+Shift+1',
+            codingPartTwo: isMac ? 'Cmd+Alt+2' : 'Alt+Shift+2',
+            codingStartCoding: isMac ? 'Cmd+Alt+3' : 'Alt+Shift+3',
+            codingNextStep: isMac ? 'Cmd+Alt+4' : 'Alt+Shift+4',
+            codingFullCode: isMac ? 'Cmd+Alt+5' : 'Alt+Shift+5',
+            codingDryRun: isMac ? 'Cmd+Alt+6' : 'Alt+Shift+6',
+            codingExit: isMac ? 'Cmd+Alt+9' : 'Alt+Shift+9',
         };
     }
 
@@ -331,6 +340,15 @@ export class CustomizeView extends LitElement {
             { key: 'nextResponse', name: 'Next Answer', description: 'Jump to the next answer in the transcript' },
             { key: 'scrollUp', name: 'Scroll Response Up', description: 'Scroll the answer transcript upward' },
             { key: 'scrollDown', name: 'Scroll Response Down', description: 'Scroll the answer transcript downward' },
+            { key: 'showMainAnswers', name: 'Main Answers', description: 'Show the main screen: main answers and coding steps' },
+            { key: 'showFollowUps', name: 'Follow-up Answers', description: 'Show the screen with answers to follow-up questions' },
+            { key: 'codingNewProblem', name: 'Coding: New Problem', description: 'Read the problem on screen and start coding mode with Part 1' },
+            { key: 'codingPartTwo', name: 'Coding: Part 2', description: 'Explain the better approach' },
+            { key: 'codingStartCoding', name: 'Coding: Start Coding', description: 'Write the first code step' },
+            { key: 'codingNextStep', name: 'Coding: Next Step', description: 'Go to the next part or code step' },
+            { key: 'codingFullCode', name: 'Coding: Full Code', description: 'Show the whole function written so far' },
+            { key: 'codingDryRun', name: 'Coding: Dry Run', description: 'Walk the example through the code' },
+            { key: 'codingExit', name: 'Coding: Exit', description: 'Leave coding mode and go back to normal answers' },
         ];
     }
 

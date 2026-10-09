@@ -135,6 +135,15 @@ export class HelpView extends LitElement {
             nextResponse: isMac ? 'Cmd+]' : 'Ctrl+]',
             scrollUp: isMac ? 'Cmd+Shift+Up' : 'Ctrl+Shift+Up',
             scrollDown: isMac ? 'Cmd+Shift+Down' : 'Ctrl+Shift+Down',
+            showMainAnswers: isMac ? 'Cmd+Alt+Left' : 'Alt+Shift+Left',
+            showFollowUps: isMac ? 'Cmd+Alt+Right' : 'Alt+Shift+Right',
+            codingNewProblem: isMac ? 'Cmd+Alt+1' : 'Alt+Shift+1',
+            codingPartTwo: isMac ? 'Cmd+Alt+2' : 'Alt+Shift+2',
+            codingStartCoding: isMac ? 'Cmd+Alt+3' : 'Alt+Shift+3',
+            codingNextStep: isMac ? 'Cmd+Alt+4' : 'Alt+Shift+4',
+            codingFullCode: isMac ? 'Cmd+Alt+5' : 'Alt+Shift+5',
+            codingDryRun: isMac ? 'Cmd+Alt+6' : 'Alt+Shift+6',
+            codingExit: isMac ? 'Cmd+Alt+9' : 'Alt+Shift+9',
         };
     }
 
@@ -159,6 +168,15 @@ export class HelpView extends LitElement {
             ['Next Answer', this.keybinds.nextResponse],
             ['Scroll Response Up', this.keybinds.scrollUp],
             ['Scroll Response Down', this.keybinds.scrollDown],
+            ['Main Answers', this.keybinds.showMainAnswers],
+            ['Follow-up Answers', this.keybinds.showFollowUps],
+            ['Coding: New Problem', this.keybinds.codingNewProblem],
+            ['Coding: Part 2', this.keybinds.codingPartTwo],
+            ['Coding: Start Coding', this.keybinds.codingStartCoding],
+            ['Coding: Next Step', this.keybinds.codingNextStep],
+            ['Coding: Full Code', this.keybinds.codingFullCode],
+            ['Coding: Dry Run', this.keybinds.codingDryRun],
+            ['Coding: Exit', this.keybinds.codingExit],
         ];
 
         return html`

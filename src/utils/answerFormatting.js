@@ -22,4 +22,37 @@ function formatLiveAnswerText(text) {
         .trim();
 }
 
-module.exports = { formatLiveAnswerText };
+// Script labels are for the model, not the reader. SAY/SPEAK/WRITE disappear (paragraphs are spoken,
+// code blocks are typed), and cues such as LISTEN or LINE COACH become the small accent labels that
+// AssistantView styles from a leading <strong>.
+/** Matches a label at line start in any of SAY: / **SAY**: / **SAY:** forms. */
+const label = name => new RegExp(String.raw`^(\s*)(?:\*\*)?(?:${name})(?:\*\*)?\s*:(?:\*\*)?\s*`, 'i');
+const DISPLAY_LABELS = [
+    [label('SAY|SPEAK|WRITE'), '$1'],
+    [label('LISTEN'), '$1**Listen** '],
+    [label('ACTION'), '$1**Edit** '],
+    [label('CODE'), '$1**Code** '],
+    [label('LINE COACH'), '$1**Line coach** '],
+    [label('COMPLEXITY'), '$1**Complexity** '],
+];
+
+/** @param {string} text */
+function formatAnswerForDisplay(text) {
+    let inFence = false;
+    return String(text || '')
+        .split('\n')
+        .map(line => {
+            if (/^\s*```/.test(line)) {
+                inFence = !inFence;
+                return line;
+            }
+            if (inFence) return line;
+            const rule = DISPLAY_LABELS.find(([pattern]) => pattern.test(line));
+            return rule ? line.replace(rule[0], rule[1]) : line;
+        })
+        .join('\n')
+        .replace(/^\s*\n/, '')
+        .replace(/\n{3,}/g, '\n\n');
+}
+
+module.exports = { formatLiveAnswerText, formatAnswerForDisplay };

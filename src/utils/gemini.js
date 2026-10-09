@@ -31,9 +31,11 @@ const { connectGeminiLive } = require('./geminiLiveTransport');
 const { buildGeminiLiveSessionConfig, isLiveServerInterrupt } = require('./geminiLiveSessionConfig');
 const { LiveAudioGapFiller } = require('./liveAudioGapFiller');
 const { LiveTurnWatchdog } = require('./liveTurnWatchdog');
-const { formatLiveAnswerText } = require('./answerFormatting');
+const { formatLiveAnswerText, formatAnswerForDisplay } = require('./answerFormatting');
 const { nextVoiceQuestion, questionText } = require('./questionMerge');
-const { streamOpenRouterAnswer, answerWithFallback, OPENROUTER_ANSWER_MODEL } = require('./answerModel');
+const { streamOpenRouterAnswer, answerWithFallback, toGeminiContents, answerModelById } = require('./answerModel');
+const { LANE_INSTRUCTION, parseLaneHeader, splitSideUpdate, isReplaceableAnswer, resolveLane, isBackchannel } = require('./answerLanes');
+const { CODING_COMMANDS, EXIT_WORDS, NEW_PROBLEM_WORDS, loadCodingSkill, CodingSession } = require('./codingSession');
 
 // Lazy-loaded to avoid circular dependency (localai.js imports from gemini.js)
 let _localai = null;
@@ -67,16 +69,18 @@ let summaryInFlight = false;
 
 const GEMINI_LIVE_MODEL = 'gemini-3.8-live';
 
-function createAnswerStream(prefix, { turnId = createTurnId(prefix), sequenceBase = 0 } = {}) {
+/** @param {string} prefix @param {{turnId?:string, sequenceBase?:number, lane?:'main'|'side', label?:string, focus?:boolean}} [options] */
+function createAnswerStream(prefix, { turnId = createTurnId(prefix), sequenceBase = 0, lane = 'main', label = '', focus = true } = {}) {
     let sequence = sequenceBase;
     let started = false;
+    const meta = { lane, label, focus };
     return {
         update(text) {
-            emitAnswer(sendToRenderer, turnId, started ? 'update' : 'start', text, sequence++);
+            emitAnswer(sendToRenderer, turnId, started ? 'update' : 'start', text, sequence++, meta);
             started = true;
         },
         complete(text, status = 'complete') {
-            emitAnswer(sendToRenderer, turnId, status, text, sequence++);
+            emitAnswer(sendToRenderer, turnId, status, text, sequence++, meta);
         },
     };
 }
@@ -165,6 +169,7 @@ function finalizeLiveConversationTurn() {
     const output = formatLiveAnswerText(liveOutputText);
     if (input && !output) liveUnansweredTurns++;
     liveInputTurnSeq++;
+    if (input) rememberHeard(input);
     if (input && currentSessionId) {
         appendSessionRecord(currentSessionId, {
             id: `${currentSessionId}:transcript:${++transcriptSequence}`,
@@ -323,6 +328,9 @@ function buildContextMessage() {
 // Conversation management functions
 function initializeNewSession(profile = null, customPrompt = null) {
     currentSessionId = Date.now().toString();
+    answerSessionId = `cheating-daddy-${currentSessionId}`;
+    // The start screen's model choice applies from the next session.
+    answerModel = answerModelById(getPreferences().answerModel);
     cancelTextAnswers();
     conversationSequence = 0;
     screenSequence = 0;
@@ -343,7 +351,7 @@ function initializeNewSession(profile = null, customPrompt = null) {
         profile,
         customPrompt: customPrompt || '',
     }).catch(error => sendToRenderer('update-status', `History error: ${error.message}`));
-    console.log('New conversation session started:', currentSessionId, 'profile:', profile);
+    console.log('New conversation session started:', currentSessionId, 'profile:', profile, 'answer model:', answerModel.id);
 }
 
 function saveConversationTurn(transcription, aiResponse) {
@@ -356,7 +364,7 @@ function saveConversationTurn(transcription, aiResponse) {
     recordConversationTurn(userSide, aiResponse);
 }
 
-// Stores a turn without consuming pendingTypedQuestion (used by the separate code card too).
+// Stores a turn without consuming pendingTypedQuestion (used by text answers).
 function recordConversationTurn(userSide, aiResponse) {
     if (!currentSessionId) {
         initializeNewSession();
@@ -460,7 +468,11 @@ function composeUserTurn(text) {
 
 // Gemini Live can only answer by speaking, and the transcript of that speech gives short, unformatted
 // answers. In BYOK mode Live listens and transcribes, and a text model writes every answer shown:
-// GPT-6 Astra through OpenRouter when that key is saved (answerModel.js), otherwise Gemini Flash.
+// the model picked on the start screen, through OpenRouter, when that key is saved (answerModel.js),
+// otherwise Gemini Flash.
+// Answers go to one of two screens (answerLanes.js): the main screen keeps the answer being read and
+// counter-questions get the second screen. Coding mode (codingSession.js) runs the DSA skill as one
+// conversation per problem.
 const GEMINI_ANSWER_MODEL = 'gemini-3.8-flash';
 const ANSWER_MAX_OUTPUT_TOKENS = 8192;
 // 3.x sends the question transcript in snapshots; wait for it to settle before answering.
@@ -468,17 +480,39 @@ const ANSWER_DEBOUNCE_MS = 400;
 const ANSWER_CONTEXT_CHARS = 6000;
 // Every answer stream starts above all earlier sequences, so a merged question can replace its card.
 const ANSWER_SEQUENCE_STEP = 1000000;
+// A repeated coding hotkey within this time is a double press, not a second request.
+const CODING_COMMAND_DEBOUNCE_MS = 1500;
+// Interviewer speech from this far back goes with a new coding problem, in case they read it out.
+const HEARD_WINDOW_MS = 3 * 60 * 1000;
+const MAX_TRACKED_CARDS = 300;
 let answerClient = null;
 let answerClientKey = '';
-let answerGeneration = 0;
-// Cancels the request of an answer that a newer question replaced, so its tokens stop being billed.
-let answerAbort = null;
 let answerTimer = null;
 let answerSequenceBase = 0;
 let liveInputTurnSeq = 0;
 let lastVoiceQuestion = null;
 // Set when a text answer fails, so Live's own spoken answer is shown for the turn instead.
 let liveAnswerFallbackPending = false;
+/** @typedef {{abort:AbortController, turnId:string, codingTurn:import('./codingSession').CodingTurn|null}} AnswerRequest */
+// Every running answer request, so a reset or a newer question can cancel it and stop its billing.
+/** @type {Set<AnswerRequest>} */
+const answerRequests = new Set();
+// The request streaming on each screen in normal mode; a newer answer for that screen replaces it.
+/** @type {{main: AnswerRequest|null, side: AnswerRequest|null}} */
+const laneRequests = { main: null, side: null };
+// What each card shows, so new speech knows whether it may still rewrite it.
+/** @type {Map<string, {lane:'main'|'side', text:string, firstTextAt:number, codingTurn:import('./codingSession').CodingTurn|null}>} */
+const answerCards = new Map();
+let hasMainCard = false;
+let mainQuestion = '';
+let answerSessionId = '';
+let answerModel = answerModelById();
+/** @type {{at:number, text:string}[]} */
+let heardLog = [];
+let lastCodingCommand = { name: '', at: 0 };
+// Counts "new problem" requests, so a screenshot that finishes after a newer request or an exit is dropped.
+let codingProblemStart = 0;
+const codingSession = new CodingSession();
 
 function textAnswersEnabled() {
     return currentProviderMode === 'byok';
@@ -493,14 +527,58 @@ function getTextModelClient(apiKey) {
     return answerClient;
 }
 
+function rememberHeard(text) {
+    const now = Date.now();
+    heardLog = [...heardLog.filter(item => now - item.at <= HEARD_WINDOW_MS), { at: now, text }];
+}
+
+function recentHeardText() {
+    const now = Date.now();
+    return heardLog
+        .filter(item => now - item.at <= HEARD_WINDOW_MS)
+        .map(item => item.text)
+        .join(' ')
+        .slice(-1500);
+}
+
+function rememberCard(turnId, card) {
+    answerCards.delete(turnId);
+    answerCards.set(turnId, card);
+    if (answerCards.size > MAX_TRACKED_CARDS) answerCards.delete(answerCards.keys().next().value);
+}
+
+/** @param {AnswerRequest|null} request */
+function cancelRequest(request) {
+    if (!request) return;
+    request.abort.abort();
+    answerRequests.delete(request);
+}
+
+function cancelCodingRequests() {
+    for (const request of [...answerRequests]) if (request.codingTurn) cancelRequest(request);
+}
+
+function notifyCodingMode() {
+    sendToRenderer('coding-mode-changed', { active: codingSession.active });
+}
+
 function cancelTextAnswers() {
-    answerGeneration++;
-    answerAbort?.abort();
-    answerAbort = null;
+    for (const request of [...answerRequests]) cancelRequest(request);
+    laneRequests.main = null;
+    laneRequests.side = null;
+    answerCards.clear();
+    hasMainCard = false;
+    mainQuestion = '';
+    heardLog = [];
     clearTimeout(answerTimer);
     answerTimer = null;
     lastVoiceQuestion = null;
     liveAnswerFallbackPending = false;
+    codingProblemStart++;
+    if (codingSession.active) {
+        codingSession.stop();
+        notifyCodingMode();
+    }
 }
 
 function scheduleAnswerForVoiceTurn() {
@@ -511,20 +589,43 @@ function scheduleAnswerForVoiceTurn() {
     answerTimer = setTimeout(() => {
         answerTimer = null;
         if (lastVoiceQuestion?.turnSeq === turnSeq && lastVoiceQuestion.fragment === fragment) return;
-        lastVoiceQuestion = nextVoiceQuestion(lastVoiceQuestion, { fragment, turnSeq, now: Date.now(), newTurnId: () => createTurnId('answer') });
-        sendTextAnswer(questionText(lastVoiceQuestion), { turnId: lastVoiceQuestion.turnId });
+        if (isBackchannel(fragment)) {
+            // "Okay" or "mm-hmm" needs no answer and must not join the question before it. Coding mode
+            // still logs it, since "yes" can confirm an assumption.
+            if (codingSession.active) codingSession.addTurn({ text: `they said: ${fragment}` }).reply = 'LANE: NONE';
+            return;
+        }
+        const previous = lastVoiceQuestion;
+        const now = Date.now();
+        const card = previous ? answerCards.get(previous.turnId) : null;
+        // Speech that continues a question may rewrite its answer only until the user starts reading it.
+        const canMerge = !card || isReplaceableAnswer({ text: card.text, firstTextAt: card.firstTextAt, now });
+        lastVoiceQuestion = nextVoiceQuestion(previous, { fragment, turnSeq, now, newTurnId: () => createTurnId('answer'), canMerge });
+        answerSpokenQuestion(questionText(lastVoiceQuestion), lastVoiceQuestion.turnId);
     }, ANSWER_DEBOUNCE_MS);
 }
 
-async function streamGeminiAnswer({ apiKey, userText, imageJpeg, signal, onText }) {
-    const parts = [];
-    if (imageJpeg) parts.push({ inlineData: { mimeType: 'image/jpeg', data: imageJpeg } });
-    parts.push({ text: userText });
+// A question asked again with more words replaces its own earlier answer and its coding turn. The
+// model picks the screen again from the whole question: "Can you walk me through" alone looks like a
+// follow-up, but the full question may be a new topic, and then the card moves to the main screen.
+function answerSpokenQuestion(question, turnId) {
+    for (const request of [...answerRequests]) {
+        if (request.turnId !== turnId) continue;
+        cancelRequest(request);
+        if (request.codingTurn) codingSession.removeTurn(request.codingTurn);
+    }
+    const earlier = answerCards.get(turnId)?.codingTurn;
+    if (earlier) codingSession.removeTurn(earlier);
+    if (codingSession.active) return sendCodingTurn({ text: `they said: ${question}`, label: question, turnId });
+    return sendNormalAnswer(question, { turnId });
+}
+
+async function streamGeminiAnswer({ apiKey, systemPrompt, messages, signal, onText }) {
     const stream = await getTextModelClient(apiKey).models.generateContentStream({
         model: GEMINI_ANSWER_MODEL,
-        contents: [{ role: 'user', parts }],
+        contents: toGeminiContents(messages),
         config: {
-            systemInstruction: currentSystemPrompt || 'You are a helpful assistant.',
+            systemInstruction: systemPrompt,
             thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
             maxOutputTokens: ANSWER_MAX_OUTPUT_TOKENS,
             abortSignal: signal,
@@ -540,65 +641,250 @@ async function streamGeminiAnswer({ apiKey, userText, imageJpeg, signal, onText 
     return { text };
 }
 
-async function sendTextAnswer(question, { turnId = createTurnId('answer') } = {}) {
+function markMainAnswer(question) {
+    hasMainCard = true;
+    mainQuestion = question;
+}
+
+/**
+ * A new main answer replaces the main and follow-up answers still being written; a new follow-up
+ * replaces only the follow-up. Coding steps follow each other, so they replace nothing.
+ * @param {AnswerRequest} request @param {'main'|'side'} lane @param {string} question
+ */
+function claimLane(request, lane, question) {
+    if (lane === 'main') markMainAnswer(question);
+    if (request.codingTurn) return;
+    const replaced = lane === 'main' ? [laneRequests.main, laneRequests.side] : [laneRequests.side];
+    for (const old of replaced) if (old && old !== request) cancelRequest(old);
+    if (lane === 'main') laneRequests.side = null;
+    laneRequests[lane] = request;
+}
+
+function shortLabel(text, limit = 70) {
+    const clean = String(text || '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    return clean.length > limit ? `${clean.slice(0, limit - 1)}…` : clean;
+}
+
+/**
+ * Streams one answer and puts it on a screen. The screen comes from the reply's LANE line unless
+ * `lane` is given (hotkey commands always belong on the main screen).
+ * @param {{question:string, label:string, turnId?:string, lane?:'main'|'side'|null, systemPrompt:string,
+ *   messages:import('./answerModel').ChatMessage[], codingTurn?:import('./codingSession').CodingTurn|null}} options
+ */
+async function streamLanedAnswer({
+    question,
+    label,
+    turnId = createTurnId('answer'),
+    lane: fixedLane = null,
+    systemPrompt,
+    messages,
+    codingTurn = null,
+}) {
     const apiKey = getApiKey();
     if (!apiKey || !question.trim()) return;
-    // The newest question wins: the older answer stops updating and its request is cancelled.
-    answerAbort?.abort();
-    const abort = new AbortController();
-    answerAbort = abort;
-    const generation = ++answerGeneration;
-    answerSequenceBase += ANSWER_SEQUENCE_STEP;
-    const answer = createAnswerStream('answer', { turnId, sequenceBase: answerSequenceBase });
-    const records = [...conversationHistory, ...screenAnalysisHistory].sort((a, b) => a.timestamp - b.timestamp);
-    const context = buildRelevantContext({ query: question, summary: currentSummary, records }).slice(-ANSWER_CONTEXT_CHARS);
-    const imageJpeg = lastScreenshotJpeg && needsVisualContext(question) ? lastScreenshotJpeg : null;
-    const userText = `${context ? `Conversation so far:\n${context}\n\n` : ''}Question:\n${question}`;
-    const startedAt = Date.now();
-    let firstTextAt = 0;
-    const onText = text => {
-        if (generation !== answerGeneration) return;
-        firstTextAt ||= Date.now();
-        answer.update(text);
-    };
-    const gemini = ({ signal, onText }) => streamGeminiAnswer({ apiKey, userText, imageJpeg, signal, onText });
     const openRouterKey = getOpenRouterApiKey();
-    sendToRenderer('update-status', 'Answering...');
+    /** @type {AnswerRequest} */
+    const request = { abort: new AbortController(), turnId, codingTurn };
+    answerRequests.add(request);
+    const { signal } = request.abort;
+    const sequenceBase = (answerSequenceBase += ANSWER_SEQUENCE_STEP);
+    const startedAt = Date.now();
+    /** @type {'main'|'side'|'none'|null} */
+    let lane = null;
+    let card = null;
+    let changedCard = null;
+    let shown = '';
+    let firstTextAt = 0;
 
+    const split = body => (lane === 'side' && codingTurn ? splitSideUpdate(body) : { answer: body, update: null });
+    const show = raw => {
+        if (signal.aborted) return;
+        if (codingTurn) codingTurn.reply = raw;
+        const header = parseLaneHeader(raw);
+        if (header.status === 'pending') return;
+        if (!lane) {
+            lane = header.lane === 'none' ? 'none' : fixedLane || resolveLane(header.lane, { hasMainAnswer: hasMainCard });
+            if (lane === 'none') {
+                // Stop the request at once so a remark that needs no answer costs almost nothing.
+                request.abort.abort();
+                return;
+            }
+            claimLane(request, lane, question);
+            card = createAnswerStream('answer', { turnId, sequenceBase, lane, label: shortLabel(label) });
+        }
+        const { answer, update } = split(header.body);
+        if (answer.trim()) {
+            firstTextAt ||= Date.now();
+            shown = formatAnswerForDisplay(answer);
+            card.update(shown);
+            rememberCard(turnId, { lane, text: answer, firstTextAt, codingTurn });
+        }
+        if (update?.trim()) {
+            changedCard ||= createAnswerStream('update', {
+                sequenceBase,
+                lane: 'main',
+                label: `Changed after "${shortLabel(question, 50)}"`,
+                focus: false,
+            });
+            changedCard.update(formatAnswerForDisplay(update));
+        }
+    };
+
+    const gemini = ({ signal, onText }) => streamGeminiAnswer({ apiKey, systemPrompt, messages, signal, onText });
+    sendToRenderer('update-status', 'Answering...');
+    let result = null;
+    let failure = null;
     try {
-        const result = openRouterKey
+        result = openRouterKey
             ? await answerWithFallback({
                   primary: ({ signal, onText }) =>
                       streamOpenRouterAnswer({
                           apiKey: openRouterKey,
-                          systemPrompt: currentSystemPrompt || 'You are a helpful assistant.',
-                          userText,
-                          imageJpeg,
+                          model: answerModel,
+                          systemPrompt,
+                          messages,
                           maxTokens: ANSWER_MAX_OUTPUT_TOKENS,
+                          sessionId: answerSessionId,
+                          cacheConversation: Boolean(codingTurn),
                           signal,
                           onText,
                       }),
                   fallback: gemini,
-                  signal: abort.signal,
-                  onText,
+                  signal,
+                  onText: show,
+                  firstTextTimeoutMs: answerModel.firstTextMs,
               })
-            : { ...(await gemini({ signal: abort.signal, onText })), usedFallback: false };
-        if (generation !== answerGeneration || !result.text.trim()) return;
-        if (result.primaryError) console.warn(`OpenRouter answer failed (${result.primaryError.message}); Gemini answered instead`);
-        const model = openRouterKey && !result.usedFallback ? OPENROUTER_ANSWER_MODEL : GEMINI_ANSWER_MODEL;
-        const cost = result.cost ? `, $${result.cost.toFixed(4)}` : '';
-        console.log(`[answer] ${model}: first text ${firstTextAt - startedAt} ms, done ${Date.now() - startedAt} ms${cost}`);
-        answer.complete(result.text.trim());
-        recordConversationTurn(question, result.text);
-        sendToRenderer('update-status', 'Listening...');
+            : { ...(await gemini({ signal, onText: show })), usedFallback: false };
     } catch (error) {
-        if (generation !== answerGeneration) return;
-        console.error('Text answer failed:', error.message);
-        liveAnswerFallbackPending = true;
-        sendToRenderer('update-status', `Answer failed: ${error.message}`);
+        failure = error;
     } finally {
-        if (answerAbort === abort) answerAbort = null;
+        answerRequests.delete(request);
+        if (laneRequests.main === request) laneRequests.main = null;
+        if (laneRequests.side === request) laneRequests.side = null;
     }
+
+    // A trailing newline settles a reply too short to have finished its LANE line while streaming.
+    if (!failure && result?.text.trim()) show(`${result.text}\n`);
+    if (lane === 'none') {
+        // Nothing to answer. A coding turn keeps the remark in the conversation log.
+        if (codingTurn) codingTurn.reply = 'LANE: NONE';
+        console.log(`[answer] no answer needed for "${shortLabel(question, 60)}"`);
+        if (!answerRequests.size) sendToRenderer('update-status', codingSession.active ? 'Coding mode' : 'Listening...');
+        return;
+    }
+    if (signal.aborted) return;
+    if (failure || !result?.text.trim()) {
+        if (codingTurn) codingSession.removeTurn(codingTurn);
+        else liveAnswerFallbackPending = true;
+        console.error('Text answer failed:', failure?.message || 'empty answer');
+        sendToRenderer('update-status', `Answer failed: ${failure?.message || 'no text'}`);
+        return;
+    }
+
+    const body = parseLaneHeader(`${result.text}\n`).body.trim();
+    const { answer, update } = split(body);
+    if (shown) card.complete(formatAnswerForDisplay(answer.trim()));
+    if (changedCard && update) changedCard.complete(formatAnswerForDisplay(update.trim()));
+    if (codingTurn) codingTurn.reply = result.text;
+    recordConversationTurn(question, body);
+    if (result.primaryError) console.warn(`OpenRouter answer failed (${result.primaryError.message}); Gemini answered instead`);
+    const model = openRouterKey && !result.usedFallback ? answerModel.id : GEMINI_ANSWER_MODEL;
+    const cost = result.cost ? `, $${result.cost.toFixed(4)}` : '';
+    console.log(
+        `[answer] ${model} ${codingTurn ? 'coding' : 'interview'} ${lane}: first text ${firstTextAt - startedAt} ms, done ${Date.now() - startedAt} ms${cost}`
+    );
+    if (!answerRequests.size) sendToRenderer('update-status', codingSession.active ? 'Coding mode' : 'Listening...');
+}
+
+/** @param {string} question @param {{turnId?:string}} [options] */
+function sendNormalAnswer(question, { turnId = createTurnId('answer') } = {}) {
+    const records = [...conversationHistory, ...screenAnalysisHistory].sort((a, b) => a.timestamp - b.timestamp);
+    const context = buildRelevantContext({ query: question, summary: currentSummary, records }).slice(-ANSWER_CONTEXT_CHARS);
+    const imageJpeg = lastScreenshotJpeg && needsVisualContext(question) ? lastScreenshotJpeg : null;
+    const userText = `${context ? `Conversation so far:\n${context}\n\n` : ''}Main question on screen: ${mainQuestion || 'none yet'}\n\nQuestion:\n${question}`;
+    return streamLanedAnswer({
+        question,
+        label: question,
+        turnId,
+        systemPrompt: `${currentSystemPrompt || 'You are a helpful assistant.'}\n\n${LANE_INSTRUCTION}`,
+        messages: [{ role: 'user', text: userText, imageJpeg }],
+    });
+}
+
+/** @param {{text:string, label:string, imageJpeg?:string|null, turnId?:string, lane?:'main'|'side'|null}} turn */
+function sendCodingTurn({ text, label, imageJpeg = null, turnId = createTurnId('code'), lane = null }) {
+    const codingTurn = codingSession.addTurn({ text, imageJpeg });
+    return streamLanedAnswer({
+        question: label,
+        label,
+        turnId,
+        lane,
+        systemPrompt: loadCodingSkill(),
+        messages: codingSession.messagesThrough(codingTurn),
+        codingTurn,
+    });
+}
+
+async function startCodingProblem(problemText = '') {
+    const start = ++codingProblemStart;
+    lastVoiceQuestion = null;
+    sendToRenderer('update-status', 'Reading the problem...');
+    const shot = await captureScreenStill({ quality: 'medium' });
+    // A second "new problem" or "exit" while the screenshot was taken wins.
+    if (start !== codingProblemStart) return;
+    cancelCodingRequests();
+    codingSession.startProblem();
+    notifyCodingMode();
+    if (!shot.success) console.warn('Coding mode screenshot failed:', shot.error);
+    const heard = recentHeardText();
+    const text = [
+        'NEW PROBLEM. Start with Part 1.',
+        shot.success ? 'The screenshot shows my screen with the problem.' : `No screenshot (${shot.error}).`,
+        problemText ? `The problem as I typed it: ${problemText}` : '',
+        heard ? `Recently heard from the interviewer: "${heard}"` : '',
+    ]
+        .filter(Boolean)
+        .join('\n');
+    return sendCodingTurn({ text, label: 'New problem', imageJpeg: shot.success ? shot.data : null, lane: 'main' });
+}
+
+function exitCodingMode() {
+    codingProblemStart++;
+    if (!codingSession.active) return;
+    cancelCodingRequests();
+    codingSession.stop();
+    lastVoiceQuestion = null;
+    notifyCodingMode();
+    sendToRenderer('update-status', 'Coding mode off');
+}
+
+/**
+ * Runs a coding-mode hotkey or typed command.
+ * @param {string} name one of new, better, code, next, full, dryrun, exit
+ * @param {{problemText?:string}} [options]
+ */
+function handleCodingCommand(name, { problemText = '' } = {}) {
+    if (!textAnswersEnabled() || !sessionParams) return { success: false, error: 'Coding mode needs a running "Use your API keys" session' };
+    if (!getApiKey()) return { success: false, error: 'No Gemini API key configured' };
+    const now = Date.now();
+    if (lastCodingCommand.name === name && now - lastCodingCommand.at < CODING_COMMAND_DEBOUNCE_MS) return { success: true, ignored: true };
+    lastCodingCommand = { name, at: now };
+    if (name === 'new') {
+        startCodingProblem(problemText).catch(error => sendToRenderer('update-status', `Coding mode error: ${error.message}`));
+        return { success: true };
+    }
+    if (name === 'exit') {
+        exitCodingMode();
+        return { success: true };
+    }
+    const command = CODING_COMMANDS[name];
+    if (!command) return { success: false, error: `Unknown coding command: ${name}` };
+    if (!codingSession.active) return { success: false, error: 'Coding mode is off. Start with "New problem".' };
+    lastVoiceQuestion = null;
+    sendCodingTurn({ text: command.text, label: command.label, lane: 'main' });
+    return { success: true };
 }
 
 function rememberScreenshot(base64Data) {
@@ -1660,7 +1946,7 @@ async function sendAudioToGemini(base64Data, geminiSessionRef) {
 }
 
 async function sendImageToGroqLlama4(base64Data, prompt) {
-    const answer = createAnswerStream('screen-groq');
+    const answer = createAnswerStream('screen-groq', { label: 'Analyze Screen' });
     const groqApiKey = getGroqApiKey();
     if (!groqApiKey) {
         return { success: false, error: 'No Groq API key configured' };
@@ -1756,7 +2042,7 @@ async function sendImageToGeminiHttp(base64Data, request) {
         return { success: false, error: 'No API key configured' };
     }
 
-    const answer = createAnswerStream('screen-gemini');
+    const answer = createAnswerStream('screen-gemini', { label: 'Analyze Screen' });
     const records = [...conversationHistory, ...screenAnalysisHistory].sort((a, b) => a.timestamp - b.timestamp);
     const context = buildRelevantContext({ query: request, summary: currentSummary, records });
     const screenRequest = buildScreenAnalysisRequest({ data: base64Data, request, context });
@@ -1768,6 +2054,7 @@ async function sendImageToGeminiHttp(base64Data, request) {
         let fullText = '';
         for await (const chunk of response) {
             if (chunk.text) {
+                if (!fullText) markMainAnswer('Analyze Screen: the screenshot of my screen');
                 fullText += chunk.text;
                 answer.update(fullText);
             }
@@ -1959,6 +2246,12 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
             }
 
             rememberScreenshot(data);
+            if (codingSession.active && textAnswersEnabled()) {
+                // The screenshot joins the problem's conversation: it can show my code, a failing test or a changed problem.
+                lastVoiceQuestion = null;
+                sendCodingTurn({ text: 'screen: This is my screen right now.', label: 'Analyze Screen', imageJpeg: data });
+                return { success: true, model: 'coding' };
+            }
             sendToRenderer('update-status', 'Analyzing screen...');
             // Paths whose answer is saved through saveConversationTurn label it "Analyze Screen";
             // the HTTP path saves its own screen record, so it must not leave this for the next voice turn.
@@ -2073,7 +2366,14 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
         if (!getApiKey()) return { success: false, error: 'No Gemini API key configured' };
         // A typed question is a new topic, so later speech must not merge into an earlier spoken question.
         lastVoiceQuestion = null;
-        sendTextAnswer(userText);
+        const newProblem = userText.match(NEW_PROBLEM_WORDS);
+        if (newProblem) return handleCodingCommand('new', { problemText: userText.slice(newProblem[0].length).trim() });
+        if (codingSession.active) {
+            if (EXIT_WORDS.test(userText)) exitCodingMode();
+            else sendCodingTurn({ text: `command: ${userText}`, label: userText });
+            return { success: true };
+        }
+        sendNormalAnswer(userText);
         return { success: true };
     });
 
@@ -2203,5 +2503,6 @@ module.exports = {
     sendAudioToGemini,
     sendImageToGeminiHttp,
     setupGeminiIpcHandlers,
+    handleCodingCommand,
     formatSpeakerResults,
 };

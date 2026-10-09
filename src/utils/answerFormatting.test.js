@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { formatLiveAnswerText } = require('./answerFormatting');
+const { formatLiveAnswerText, formatAnswerForDisplay } = require('./answerFormatting');
 
 test('splits Question / Answer / Why labels into separate paragraphs', () => {
     const text = '**Question**: Is there a src folder? **Answer**: Yes. **Why**: It is visible on the left.';
@@ -19,4 +19,29 @@ test('leaves inline emphasis, code fences and already formatted text alone', () 
     assert.equal(formatLiveAnswerText(fenced), fenced);
     const formatted = '**Question**: A?\n\n**Answer**: B.';
     assert.equal(formatLiveAnswerText(formatted), formatted);
+});
+
+test('script labels outside code become reading cues, and code blocks stay exactly as typed', () => {
+    const reply = [
+        'SAY:',
+        "I'll start with a set.",
+        '```python',
+        '# SAY: not a label in code',
+        'seen = set()',
+        '```',
+        'LISTEN: for their answer',
+        '**ACTION:** replace line 3',
+    ].join('\n');
+    assert.equal(
+        formatAnswerForDisplay(reply),
+        [
+            "I'll start with a set.",
+            '```python',
+            '# SAY: not a label in code',
+            'seen = set()',
+            '```',
+            '**Listen** for their answer',
+            '**Edit** replace line 3',
+        ].join('\n')
+    );
 });

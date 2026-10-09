@@ -2,6 +2,7 @@ const { BrowserWindow, globalShortcut, ipcMain, screen, Menu } = require('electr
 const path = require('node:path');
 const storage = require('../storage');
 const { startOptionTapMonitor, stopOptionTapMonitor } = require('./optionTapMonitor');
+const { handleCodingCommand } = require('./gemini');
 const {
     canRegisterGlobalShortcut,
     getDefaultToggleVisibility,
@@ -261,6 +262,17 @@ function getDefaultKeybinds() {
         scrollUp: isMac ? 'Cmd+Shift+Up' : 'Ctrl+Shift+Up',
         scrollDown: isMac ? 'Cmd+Shift+Down' : 'Ctrl+Shift+Down',
         emergencyErase: isMac ? 'Cmd+Shift+E' : 'Ctrl+Shift+E',
+        // Answer screens and coding mode. Cmd+Option on Mac and Alt+Shift on Windows, because plain Cmd/Ctrl
+        // with arrows or digits already belongs to editors and browsers (line start/end, tab switching).
+        showMainAnswers: isMac ? 'Cmd+Alt+Left' : 'Alt+Shift+Left',
+        showFollowUps: isMac ? 'Cmd+Alt+Right' : 'Alt+Shift+Right',
+        codingNewProblem: isMac ? 'Cmd+Alt+1' : 'Alt+Shift+1',
+        codingPartTwo: isMac ? 'Cmd+Alt+2' : 'Alt+Shift+2',
+        codingStartCoding: isMac ? 'Cmd+Alt+3' : 'Alt+Shift+3',
+        codingNextStep: isMac ? 'Cmd+Alt+4' : 'Alt+Shift+4',
+        codingFullCode: isMac ? 'Cmd+Alt+5' : 'Alt+Shift+5',
+        codingDryRun: isMac ? 'Cmd+Alt+6' : 'Alt+Shift+6',
+        codingExit: isMac ? 'Cmd+Alt+9' : 'Alt+Shift+9',
     };
 }
 
@@ -422,6 +434,33 @@ function updateGlobalShortcuts(keybinds, mainWindow, sendToRenderer, geminiSessi
             console.log(`Registered scrollDown: ${keybinds.scrollDown}`);
         } catch (error) {
             console.error(`Failed to register scrollDown (${keybinds.scrollDown}):`, error);
+        }
+    }
+
+    const runCodingCommand = name => {
+        const result = handleCodingCommand(name);
+        if (result.error) sendToRenderer('update-status', result.error);
+    };
+    const commandActions = {
+        showMainAnswers: () => sendToRenderer('switch-answer-screen', 'main'),
+        showFollowUps: () => sendToRenderer('switch-answer-screen', 'side'),
+        codingNewProblem: () => runCodingCommand('new'),
+        codingPartTwo: () => runCodingCommand('better'),
+        codingStartCoding: () => runCodingCommand('code'),
+        codingNextStep: () => runCodingCommand('next'),
+        codingFullCode: () => runCodingCommand('full'),
+        codingDryRun: () => runCodingCommand('dryrun'),
+        codingExit: () => runCodingCommand('exit'),
+    };
+    for (const [action, run] of Object.entries(commandActions)) {
+        const keybind = keybinds[action];
+        if (!keybind) continue;
+        try {
+            // register() returns false when another app already owns the chord.
+            if (globalShortcut.register(keybind, run)) console.log(`Registered ${action}: ${keybind}`);
+            else console.warn(`Could not register ${action} (${keybind}): another app already uses it`);
+        } catch (error) {
+            console.error(`Failed to register ${action} (${keybind}):`, error);
         }
     }
 

@@ -492,6 +492,7 @@ export class MainView extends LitElement {
         _geminiKey: { state: true },
         _groqKey: { state: true },
         _openrouterKey: { state: true },
+        _answerModel: { state: true },
         _tokenError: { state: true },
         _keyError: { state: true },
         // Local AI state
@@ -515,6 +516,7 @@ export class MainView extends LitElement {
         this._geminiKey = '';
         this._groqKey = '';
         this._openrouterKey = '';
+        this._answerModel = '';
         this._tokenError = false;
         this._keyError = false;
         this._showLocalHelp = false;
@@ -545,6 +547,7 @@ export class MainView extends LitElement {
             this._geminiKey = await cheatingDaddy.storage.getApiKey().catch(() => '') || '';
             this._groqKey = await cheatingDaddy.storage.getGroqApiKey().catch(() => '') || '';
             this._openrouterKey = creds.openrouterKey || '';
+            this._answerModel = window.require('./utils/answerModel').answerModelById(prefs.answerModel).id;
 
             // Load local AI settings
             this._ollamaHost = prefs.ollamaHost || 'http://127.0.0.1:11434';
@@ -746,6 +749,12 @@ export class MainView extends LitElement {
         this.requestUpdate();
     }
 
+    async _saveAnswerModel(val) {
+        this._answerModel = val;
+        await cheatingDaddy.storage.updatePreference('answerModel', val);
+        this.requestUpdate();
+    }
+
     _handleProfileChange(e) {
         this.onProfileChange(e.target.value);
     }
@@ -879,13 +888,24 @@ export class MainView extends LitElement {
                 <label class="form-label">OpenRouter API Key</label>
                 <input
                     type="password"
-                    placeholder="Optional, GPT-6 Astra writes the answers"
+                    placeholder="Optional, the answer model below writes the answers"
                     .value=${this._openrouterKey}
                     @input=${e => this._saveOpenRouterKey(e.target.value)}
                 />
                 <div class="form-hint">
                     <span class="link" @click=${() => this.onExternalLink('https://openrouter.ai/settings/keys')}>Get OpenRouter key</span>
                 </div>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label">Answer Model</label>
+                <select
+                    .value=${this._answerModel}
+                    @change=${e => this._saveAnswerModel(e.target.value)}
+                >
+                    ${window.require('./utils/answerModel').ANSWER_MODELS.map(model => html`<option value=${model.id} ?selected=${this._answerModel === model.id}>${model.label}</option>`)}
+                </select>
+                <div class="form-hint">Used when an OpenRouter key is saved. Applies from the next session.</div>
             </div>
 
             <div class="form-group">

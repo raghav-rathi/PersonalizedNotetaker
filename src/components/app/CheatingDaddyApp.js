@@ -8,6 +8,9 @@ import { OnboardingView } from '../views/OnboardingView.js';
 import { AICustomizeView } from '../views/AICustomizeView.js';
 import { FeedbackView } from '../views/FeedbackView.js';
 
+// Older cards are dropped past this many, so a long meeting doesn't keep growing the overlay.
+const MAX_ANSWER_CARDS = 100;
+
 export class CheatingDaddyApp extends LitElement {
     static styles = css`
         * {
@@ -300,11 +303,47 @@ export class CheatingDaddyApp extends LitElement {
             position: absolute;
             left: 50%;
             transform: translateX(-50%);
+            display: flex;
+            align-items: center;
+            gap: var(--space-sm);
             font-size: var(--font-size-xs);
             color: var(--text-muted);
             font-weight: var(--font-weight-medium);
             white-space: nowrap;
             pointer-events: none;
+        }
+
+        .live-bar-mode.coding {
+            color: var(--accent);
+        }
+
+        /* Main answers and follow-up answers are two screens; the tabs show which one is open */
+        .screen-tabs {
+            display: flex;
+            gap: 2px;
+            pointer-events: auto;
+            -webkit-app-region: no-drag;
+        }
+
+        .screen-tab {
+            background: none;
+            border: 1px solid transparent;
+            border-radius: 100px;
+            color: var(--text-muted);
+            font: inherit;
+            padding: 1px var(--space-sm);
+            cursor: pointer;
+        }
+
+        .screen-tab.active {
+            color: var(--text-primary);
+            border-color: var(--border-strong);
+            background: var(--bg-elevated);
+        }
+
+        .screen-new {
+            margin-left: 4px;
+            color: var(--accent);
         }
 
         .live-bar-right {
@@ -380,7 +419,9 @@ export class CheatingDaddyApp extends LitElement {
         selectedProfile: { type: String },
         selectedLanguage: { type: String },
         responses: { type: Array },
-        currentResponseIndex: { type: Number },
+        activeScreen: { state: true },
+        codingMode: { state: true },
+        _unseen: { state: true },
         selectedScreenshotInterval: { type: String },
         selectedImageQuality: { type: String },
         layoutMode: { type: String },
@@ -407,7 +448,8 @@ export class CheatingDaddyApp extends LitElement {
         this.selectedImageQuality = 'medium';
         this.layoutMode = 'normal';
         this.responses = [];
-        this.currentResponseIndex = -1;
+        this.activeScreen = 'main';
+        this.codingMode = false;
         this._viewInstances = new Map();
         this._isClickThrough = false;
         this._stealthHidden = false;
@@ -420,11 +462,19 @@ export class CheatingDaddyApp extends LitElement {
         this._whisperDownloading = false;
         this._localVersion = '';
         this._sessionController = null;
+        // Cards live in parallel arrays: text (responses), turn id, screen ('main' or 'side') and label.
         this._answerTurnIds = [];
+        this._answerLanes = [];
+        this._answerLabels = [];
         this._answerSequences = {};
         this._pendingAnswerEvents = new Map();
         this._answerFlushTimer = null;
-        this.responseNumberOffset = 0;
+        // Each screen remembers its focused card, how many new cards arrived while it was hidden, and how
+        // many old cards were dropped (so card numbers stay stable).
+        this._screenFocus = { main: null, side: null };
+        this._unseen = { main: 0, side: 0 };
+        this._trimmed = { main: 0, side: 0 };
+        this._screenViewCache = null;
 
         this._loadFromStorage();
         this._checkForUpdates();
@@ -500,6 +550,10 @@ export class CheatingDaddyApp extends LitElement {
                 }
                 this.requestUpdate();
             });
+            ipcRenderer.on('coding-mode-changed', (_, data) => {
+                this.codingMode = Boolean(data?.active);
+            });
+            ipcRenderer.on('switch-answer-screen', (_, screen) => this.switchScreen(screen));
         }
 
         this._optionHeld = false;
@@ -548,6 +602,8 @@ export class CheatingDaddyApp extends LitElement {
             ipcRenderer.removeAllListeners('reconnect-failed');
             ipcRenderer.removeAllListeners('whisper-downloading');
             ipcRenderer.removeAllListeners('stealth-hidden-changed');
+            ipcRenderer.removeAllListeners('coding-mode-changed');
+            ipcRenderer.removeAllListeners('switch-answer-screen');
         }
         if (this._answerFlushTimer) clearTimeout(this._answerFlushTimer);
     }
@@ -589,50 +645,98 @@ export class CheatingDaddyApp extends LitElement {
     }
 
     addNewResponse(response) {
-        const wasOnLatest = this.currentResponseIndex === this.responses.length - 1;
-        this.responses = [...this.responses, response];
-        if (wasOnLatest || this.currentResponseIndex === -1) {
-            this.currentResponseIndex = this.responses.length - 1;
-        }
-        this._awaitingNewResponse = false;
-        this.requestUpdate();
-    }
-
-    updateCurrentResponse(response) {
-        if (this.responses.length > 0) {
-            this.responses = [...this.responses.slice(0, -1), response];
-        } else {
-            this.addNewResponse(response);
-        }
-        this.requestUpdate();
+        const { createTurnId } = window.require('./utils/answerEvents');
+        this._applyAnswerEvent({
+            turnId: createTurnId('notice'),
+            event: 'complete',
+            text: String(response),
+            sequence: 0,
+            lane: 'main',
+            label: 'Notice',
+        });
     }
 
     _applyAnswerEvent(event) {
         if (!event?.turnId) return;
         const { applyAnswerEvent } = window.require('./utils/answerEvents');
-        const oldLength = this.responses.length;
-        const wasOnLatest = this.currentResponseIndex < 0 || this.currentResponseIndex === oldLength - 1;
-        const next = applyAnswerEvent(
-            { responses: this.responses, turnIds: this._answerTurnIds, sequences: this._answerSequences },
-            event
-        );
-        this.responses = next.responses;
-        this._answerTurnIds = next.turnIds;
+        const state = {
+            responses: this.responses,
+            turnIds: this._answerTurnIds,
+            lanes: this._answerLanes,
+            labels: this._answerLabels,
+            sequences: this._answerSequences,
+        };
+        const next = applyAnswerEvent(state, event);
+        if (next === state) return;
+        const isNew = next.turnIds.length > state.turnIds.length;
+        // A question re-asked with more words can move its card to the other screen; treat that like a new card.
+        const position = next.turnIds.indexOf(event.turnId);
+        const moved = !isNew && next.lanes[position] !== state.lanes[position];
+        let { responses, turnIds, lanes, labels } = next;
+        const removed = responses.length - MAX_ANSWER_CARDS;
+        if (removed > 0) {
+            const trimmed = { ...this._trimmed };
+            for (let index = 0; index < removed; index++) {
+                trimmed[lanes[index]]++;
+                delete next.sequences[turnIds[index]];
+            }
+            this._trimmed = trimmed;
+            [responses, turnIds, lanes, labels] = [responses, turnIds, lanes, labels].map(list => list.slice(removed));
+        }
+        this.responses = responses;
+        this._answerTurnIds = turnIds;
+        this._answerLanes = lanes;
+        this._answerLabels = labels;
         this._answerSequences = next.sequences;
-        if (this.responses.length > 100) {
-            const removed = this.responses.length - 100;
-            const removedTurnIds = this._answerTurnIds.slice(0, removed);
-            this.responses = this.responses.slice(removed);
-            this._answerTurnIds = this._answerTurnIds.slice(removed);
-            for (const turnId of removedTurnIds) delete this._answerSequences[turnId];
-            this.responseNumberOffset += removed;
-            if (!wasOnLatest) this.currentResponseIndex = Math.max(0, this.currentResponseIndex - removed);
-        }
-        if (wasOnLatest || this.responses.length > oldLength) {
-            this.currentResponseIndex = this.responses.length - 1;
-        }
+        const index = turnIds.indexOf(event.turnId);
+        if ((isNew || moved) && index >= 0) this._placeNewCard(event.turnId, lanes[index], event.focus !== false);
         this._awaitingNewResponse = false;
         this.requestUpdate();
+    }
+
+    // A new answer opens its screen and becomes that screen's focused card, so a follow-up answer jumps to
+    // the follow-up screen. A card marked focus:false (a step changed by a follow-up) leaves the user's place alone.
+    _placeNewCard(turnId, lane, focus) {
+        if (!focus) {
+            if (lane !== this.activeScreen) this._unseen = { ...this._unseen, [lane]: this._unseen[lane] + 1 };
+            return;
+        }
+        this._screenFocus = { ...this._screenFocus, [lane]: turnId };
+        this.switchScreen(lane);
+        this._revealCard(turnId);
+    }
+
+    switchScreen(screen) {
+        if ((screen !== 'main' && screen !== 'side') || screen === this.activeScreen) return;
+        this.activeScreen = screen;
+        this._unseen = { ...this._unseen, [screen]: 0 };
+    }
+
+    async _revealCard(turnId) {
+        await this.updateComplete;
+        const view = this.shadowRoot?.querySelector('assistant-view');
+        if (!view) return;
+        await view.updateComplete;
+        const index = this._screenView(this.activeScreen).turnIds.indexOf(turnId);
+        if (index >= 0) view.revealCard(index);
+    }
+
+    // The cards of one screen, with numbered labels, memoised so a re-render with no card changes passes the same arrays.
+    _screenView(screen) {
+        const key = [this.responses, this._answerLanes, this._answerLabels, screen, this._screenFocus[screen], this._trimmed[screen]];
+        if (this._screenViewCache?.key.every((part, index) => part === key[index])) return this._screenViewCache.view;
+        const view = { responses: [], labels: [], turnIds: [], focusIndex: -1 };
+        this._answerLanes.forEach((lane, index) => {
+            if (lane !== screen) return;
+            const number = this._trimmed[screen] + view.responses.length + 1;
+            const label = this._answerLabels[index];
+            view.responses.push(this.responses[index]);
+            view.labels.push(label ? `${number}. ${label}` : `Answer ${number}`);
+            view.turnIds.push(this._answerTurnIds[index]);
+        });
+        view.focusIndex = view.turnIds.indexOf(this._screenFocus[screen]);
+        this._screenViewCache = { key, view };
+        return view;
     }
 
     handleAnswerEvent(event) {
@@ -755,10 +859,15 @@ export class CheatingDaddyApp extends LitElement {
         }
         this.responses = [];
         this._answerTurnIds = [];
+        this._answerLanes = [];
+        this._answerLabels = [];
         this._answerSequences = {};
         this._pendingAnswerEvents.clear();
-        this.responseNumberOffset = 0;
-        this.currentResponseIndex = -1;
+        this._screenFocus = { main: null, side: null };
+        this._unseen = { main: 0, side: 0 };
+        this._trimmed = { main: 0, side: 0 };
+        this.activeScreen = 'main';
+        this.codingMode = false;
         this.startTime = Date.now();
         this.sessionActive = true;
         this.currentView = 'assistant';
@@ -834,7 +943,8 @@ export class CheatingDaddyApp extends LitElement {
     }
 
     handleResponseIndexChanged(e) {
-        this.currentResponseIndex = e.detail.index;
+        const turnId = this._screenView(this.activeScreen).turnIds[e.detail.index] ?? null;
+        this._screenFocus = { ...this._screenFocus, [this.activeScreen]: turnId };
         this.shouldAnimateResponse = false;
         this.requestUpdate();
     }
@@ -911,12 +1021,14 @@ export class CheatingDaddyApp extends LitElement {
             case 'history':
                 return html`<history-view></history-view>`;
 
-            case 'assistant':
+            case 'assistant': {
+                const screen = this._screenView(this.activeScreen);
                 return html`
                     <assistant-view
-                        .responses=${this.responses}
-                        .responseNumberOffset=${this.responseNumberOffset}
-                        .currentResponseIndex=${this.currentResponseIndex}
+                        .responses=${screen.responses}
+                        .labels=${screen.labels}
+                        .screen=${this.activeScreen}
+                        .currentResponseIndex=${screen.focusIndex}
                         .selectedProfile=${this.selectedProfile}
                         .onSendText=${msg => this.handleSendText(msg)}
                         .shouldAnimateResponse=${this.shouldAnimateResponse}
@@ -928,6 +1040,7 @@ export class CheatingDaddyApp extends LitElement {
                         }}
                     ></assistant-view>
                 `;
+            }
 
             default:
                 return html`<div>Unknown view: ${this.currentView}</div>`;
@@ -1077,7 +1190,23 @@ export class CheatingDaddyApp extends LitElement {
                         </svg>
                     </button>
                 </div>
-                <div class="live-bar-center">${profileLabels[this.selectedProfile] || 'Session'}</div>
+                <div class="live-bar-center">
+                    <span class="live-bar-mode ${this.codingMode ? 'coding' : ''}">
+                        ${this.codingMode ? 'Coding' : profileLabels[this.selectedProfile] || 'Session'}
+                    </span>
+                    <span class="screen-tabs">
+                        ${[
+                            ['main', 'Main'],
+                            ['side', 'Follow-ups'],
+                        ].map(
+                            ([screen, name]) => html`
+                                <button class="screen-tab ${screen === this.activeScreen ? 'active' : ''}" @click=${() => this.switchScreen(screen)}>
+                                    ${name}${this._unseen[screen] ? html`<span class="screen-new">${this._unseen[screen]} new</span>` : ''}
+                                </button>
+                            `
+                        )}
+                    </span>
+                </div>
                 <div class="live-bar-right">
                     ${this.statusText ? html`<span class="live-bar-text">${this.statusText}</span>` : ''}
                     <span class="live-bar-text">${this.getElapsedTime()}</span>

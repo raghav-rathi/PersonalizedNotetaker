@@ -28,3 +28,10 @@ test('a question after the merge window gets a new answer card', () => {
     assert.notEqual(after.turnId, first.turnId);
     assert.equal(questionText(after), 'How would you debug a Pending pod?');
 });
+
+test('speech after the user started reading an answer is a new question, even inside the merge window', () => {
+    const first = nextVoiceQuestion(null, { fragment: 'Tell me about yourself.', turnSeq: 8, now: 0, newTurnId });
+    const next = nextVoiceQuestion(first, { fragment: 'And why this team?', turnSeq: 9, now: 3000, newTurnId, canMerge: false });
+    assert.notEqual(next.turnId, first.turnId);
+    assert.equal(questionText(next), 'And why this team?');
+});

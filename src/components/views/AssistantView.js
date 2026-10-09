@@ -381,7 +381,8 @@ export class AssistantView extends LitElement {
 
     static properties = {
         responses: { type: Array },
-        responseNumberOffset: { type: Number },
+        labels: { type: Array },
+        screen: { type: String },
         currentResponseIndex: { type: Number },
         selectedProfile: { type: String },
         onSendText: { type: Function },
@@ -392,8 +393,10 @@ export class AssistantView extends LitElement {
 
     constructor() {
         super();
+        // The cards of the screen on show ('main' or 'side'); the app root picks them.
         this.responses = [];
-        this.responseNumberOffset = 0;
+        this.labels = [];
+        this.screen = 'main';
         this.currentResponseIndex = -1;
         this.selectedProfile = 'interview';
         this.onSendText = () => {};
@@ -407,6 +410,9 @@ export class AssistantView extends LitElement {
         this._markdownCache = new Map();
         this._visibleStart = -1;
         this._visibleEnd = -1;
+        // Each screen keeps its own scroll position, so switching back returns to the same line.
+        this._renderedScreen = null;
+        this._scrollTops = { main: 0, side: 0 };
     }
 
     getProfileNames() {
@@ -422,6 +428,7 @@ export class AssistantView extends LitElement {
     }
 
     getPlaceholderText() {
+        if (this.screen === 'side') return 'Answers to follow-up questions show up here.';
         const profileNames = this.getProfileNames();
         return `Listening to your ${profileNames[this.selectedProfile] || 'session'}...`;
     }
@@ -517,6 +524,15 @@ export class AssistantView extends LitElement {
         if (card) {
             card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         }
+    }
+
+    // Puts the first line of a new answer at the top, so reading starts at its beginning.
+    revealCard(index) {
+        const container = this._getContainer();
+        const card = container?.querySelector(`[data-answer-index="${index}"]`);
+        if (!card) return;
+        const padding = parseFloat(getComputedStyle(container).paddingTop) || 0;
+        container.scrollTop += card.getBoundingClientRect().top - container.getBoundingClientRect().top - padding;
     }
 
     jumpToLatest() {
@@ -768,11 +784,16 @@ export class AssistantView extends LitElement {
         this._syncTranscript();
     }
 
+    willUpdate(changedProperties) {
+        if (changedProperties.has('screen') && this._renderedScreen) {
+            const container = this._getContainer();
+            if (container) this._scrollTops[this._renderedScreen] = container.scrollTop;
+        }
+    }
+
     updated(changedProperties) {
         super.updated(changedProperties);
-        if (changedProperties.has('responses')) {
-            this._syncTranscript();
-        } else if (changedProperties.has('currentResponseIndex')) {
+        if (['responses', 'labels', 'screen', 'currentResponseIndex'].some(name => changedProperties.has(name))) {
             this._syncTranscript();
         }
 
@@ -810,7 +831,6 @@ export class AssistantView extends LitElement {
 
         const label = document.createElement('div');
         label.className = 'answer-label';
-        label.textContent = `Answer ${this.responseNumberOffset + index + 1}`;
 
         const body = document.createElement('div');
         body.className = 'answer-body';
@@ -820,7 +840,9 @@ export class AssistantView extends LitElement {
         return card;
     }
 
-    _setCardBody(card, content) {
+    _setCardBody(card, content, label) {
+        const labelNode = card.querySelector('.answer-label');
+        if (labelNode && labelNode.textContent !== label) labelNode.textContent = label;
         const body = card.querySelector('.answer-body');
         if (!body) return;
         if (this._renderedContent.get(card) === content) return;
@@ -872,7 +894,9 @@ export class AssistantView extends LitElement {
         const container = this._getContainer();
         if (!container) return;
 
-        const scrollTop = container.scrollTop;
+        const switched = this._renderedScreen !== this.screen;
+        const scrollTop = switched ? this._scrollTops[this.screen] || 0 : container.scrollTop;
+        this._renderedScreen = this.screen;
 
         if (this.responses.length === 0) {
             this._disconnectLatestObserver();
@@ -882,6 +906,8 @@ export class AssistantView extends LitElement {
             placeholder.textContent = this.getPlaceholderText();
             container.appendChild(placeholder);
             this._cardCount = 0;
+            this._visibleStart = -1;
+            this._visibleEnd = -1;
             this._showJumpToLatest = false;
             container.scrollTop = scrollTop;
             return;
@@ -890,7 +916,7 @@ export class AssistantView extends LitElement {
         const { visibleAnswerRange } = window.require('./utils/visibleAnswerRange');
         const range = visibleAnswerRange(this.responses.length, this.currentResponseIndex, 30);
         const rangeChanged = range.start !== this._visibleStart || range.end !== this._visibleEnd;
-        if (rangeChanged || container.querySelector('.placeholder')) {
+        if (switched || rangeChanged || container.querySelector('.placeholder')) {
             container.innerHTML = '';
             this._cardCount = 0;
             this._visibleStart = range.start;
@@ -900,15 +926,13 @@ export class AssistantView extends LitElement {
         const previousCount = this._cardCount;
         while (this._visibleStart + this._cardCount < this._visibleEnd) {
             const index = this._visibleStart + this._cardCount;
-            const card = this._createCard(index);
-            container.appendChild(card);
-            this._setCardBody(card, this.responses[index]);
+            container.appendChild(this._createCard(index));
             this._cardCount++;
         }
 
         for (const card of container.querySelectorAll('.answer-card')) {
             const index = Number(card.dataset.answerIndex);
-            this._setCardBody(card, this.responses[index]);
+            this._setCardBody(card, this.responses[index], this.labels[index] || `Answer ${index + 1}`);
         }
 
         this._updateFocusedCard();
