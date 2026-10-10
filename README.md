@@ -63,6 +63,7 @@ For a DSA coding round, put the problem on screen and press `Cmd+Option+1`. The 
 - Typing `new problem` followed by the problem text also starts it, and typing `exit` leaves. Anything else you type goes to the model as an instruction.
 - What the interviewer says is passed on automatically. "Can you do better?" and "go ahead and code it" move the main screen forward. Other questions get a short answer on Follow-ups. If one of them changes code you already typed, the changed step appears on Main, marked "Changed after ...", and your place stays where it was.
 - Analyze Screen in coding mode sends the screenshot into the same conversation, for example to check your code or a failing test.
+- **Type along.** While a step with code or a pad is on Main, a strip under the answers shows the line to type now, with the line before and after it. Say the line (the comments are the reasons), type it in the editor and press Enter, and the strip moves to the next line by itself. `Cmd+Option+Up/Down` (`Alt+Shift+Up/Down` on Windows) move it back or forward when it gets out of step, for example after you accept an autocomplete suggestion with Enter. Enter only counts while the strip is showing, and Enter in the app's own message box never counts. It uses the same macOS Accessibility permission as the Option-tap hide.
 
 Answer length, voice and content come from **AI Context → Custom Instructions**. `docs/prompts/interview-prompt.txt` is a ready-made version in the voice of a mid-level engineer talking, with short sentences, contractions and plain words. Answer length fits the question: 10 to 20 seconds to name something, about 40 seconds for a definition, about a minute for why, how and experience questions, and about a minute and a half for a story. It includes practiced answers for seven likely questions. It brings up your background only when the question is about you, builds stories only from the listed facts, and has a coding mode. Paste it in, then start a new session; custom instructions are loaded at session start.
 
@@ -78,6 +79,7 @@ Word counts are generation targets, not guarantees. Read an answer before you sa
 - **Analyze Screen**: `Ctrl/Cmd + Enter`. While the app runs this works in every app, so don't use it to send messages elsewhere.
 - **Main / Follow-ups screen**: `Cmd + Option + Left/Right` on Mac, `Alt + Shift + Left/Right` on Windows
 - **Coding mode**: `Cmd + Option + 1-6, 9` on Mac, `Alt + Shift + 1-6, 9` on Windows (see Coding mode)
+- **Type along**: `Cmd + Option + Up/Down` on Mac, `Alt + Shift + Up/Down` on Windows - line back/forward
 - **Send Message**: `Enter` - Send text to AI
 
 ## Audio Capture

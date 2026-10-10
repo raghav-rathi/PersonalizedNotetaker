@@ -16,7 +16,7 @@ Last updated: 2026-10-06, on the owner's Mac (macOS arm64). Next step: the owner
 - An Electron desktop app in plain JavaScript. The main process uses CommonJS. The UI uses Lit web components (ES modules) plus one classic renderer script. There is no React, TypeScript or build step for app code.
 - Electron 44.3.0 and Electron Forge 7.11.2 (`npm start`, `npm run package`, `npm run make`).
 - It shows an always-on-top overlay, captures system audio (optionally the microphone) and screenshots, sends them to an AI model and shows the answers. Profiles: job interview, LLD interview, sales, meeting, presentation, negotiation, exam.
-- License: GPL-3.0, inherited from upstream. This repository is public.
+- License: GPL-3.0, inherited from upstream. The repository has been private since 2026-10-09; it was public before, so anything committed earlier may exist in other people's copies.
 
 Provenance:
 
@@ -52,6 +52,7 @@ git fetch upstream
 | `src/utils/answerModel.js`                                                 | The answer models on the start screen (`ANSWER_MODELS`), the OpenRouter request and stream, and the fallback to Gemini Flash.                                                                                               |
 | `src/utils/answerLanes.js`                                                 | The `LANE:` line that puts each answer on the main screen or the follow-up screen, the "okay"/"mm-hmm" filter, and the merge rule.                                                                                          |
 | `src/utils/codingSession.js`, `src/prompts/dsa-coding-skill.md`            | Coding mode: one conversation per problem, the hotkey commands, and the app's version of the owner's DSA interview skill.                                                                                                   |
+| `src/utils/typeAlong.js`                                                   | Type-along: the lines to type from a coding step. `optionTapMonitor.js` forwards Enter presses to it.                                                                                                                       |
 | `src/utils/renderer.js`                                                    | Renderer glue loaded by `index.html`. Storage wrappers, provider start, audio capture (`startCapture`, line 691), screenshots, the `window.cheatingDaddy` API.                                                              |
 | `src/audio-worklet.js`                                                     | AudioWorklet that turns captured audio into 40 ms 16-bit frames.                                                                                                                                                            |
 | `src/components/**`                                                        | Lit UI. `CheatingDaddyApp.js` is the root and starts meetings. `MainView.js` is the start screen.                                                                                                                           |
@@ -438,6 +439,12 @@ Commits on top of Rohit's `8c49d85`:
     - Tests: 91 unit tests. In the real app with GPT-6.1 Sol, a main question went to the main screen, a follow-up jumped to the follow-up screen, Cmd+Option+Left returned to the same card, "Okay, makes sense" produced nothing, and a new topic went back to the main screen. The coding round has not been completed in the real app: the test screenshot showed another window, so the model asked for the problem. In a direct comparison with the app's prompts (16 interview answers and 7 coding steps per model), Astra showed its first text after a median 1.4 s (p90 2.8 s) at 2.4 cents per answer, and Opus at medium effort after a median 5.2 s (p90 13.8 s, slowest 20.7 s) at 1.5 cents. Opus put 2 of 23 replies on the wrong screen and wrote longer follow-up answers.
     - Known risks: while the app runs, Cmd+Enter in any app triggers Analyze Screen, and a test capture sent a LinkedIn page that way. Cmd+Shift+E (Emergency Erase) is also VS Code's Show Explorer. The Windows keys are untested.
 
+12. 2026-10-09 `feat: add type-along for coding steps`.
+    - What: in coding mode, the focused card on the main screen is split into the lines inside its fenced blocks, code and pads (`typeAlong.js`). A strip under the answers shows the current line large, with the line before and after it. Each plain Enter pressed in any app moves it one line on: `optionTapMonitor.js` passes Enter from the existing `uiohook-napi` key hook, but only while the overlay reports the strip as showing (`type-along-active` IPC). Cmd+Option+Up/Down (Alt+Shift+Up/Down) step back and forward. Each card keeps its own line, so a follow-up question or going back to an older card doesn't lose the place. A new answer now also stays pinned to the top of the view while it streams in. Before, it was revealed once while still too short to scroll there, so it stayed at the bottom.
+    - Why: the owner reads code off the overlay while typing it in the interview editor. One line at a time, with its reason, keeps his eyes in one place, lets him explain each line as he types it, like someone coding for real, and needs no key press beyond Enter.
+    - Tests: 94 unit tests. In the real app with GPT-6 Astra and TextEdit standing in for the editor (the problem shown in TextEdit, Cmd+Option+1 for a new problem, then Part 2, start coding and next step, with each line typed by System Events): every Enter moved the strip one line; Cmd+Option+Down and Up moved it as expected. A spoken counter-question switched to the follow-up screen and hid the strip, and Cmd+Option+Left brought it back on the same line. Typing all 10 lines of hop 1 showed "all 10 lines typed", and the next step started again at line 1. No Enter reached the app before coding mode or after exit. Every new card started at the top of the view. Five Astra answers cost $0.16.
+    - Limits: an Enter that doesn't add a line (accepting an autocomplete suggestion, for example) also moves the strip, and Cmd+Option+Up puts it back. Without the macOS Accessibility permission or `uiohook-napi`, only the Cmd+Option+Up/Down keys move it.
+
 Not in git (Mac only): the owner's `preferences.json` and API keys, backups of older prompts (`preferences.backup-before-ste-prompt.json`, `preferences.backup-before-humanistic-prompt.json`), and the downloaded Electron binary.
 
 No app code was changed to fix Windows. Change 5 changes how answers are written on every platform, not a Windows fix. The exact Windows symptom is unknown, and none of these fixes can be tested on a Mac. The plan is to confirm the cause on the Windows PC first, then apply only the fixes it needs.
@@ -445,12 +452,12 @@ No app code was changed to fix Windows. Change 5 changes how answers are written
 ## 8. Commands, tests and conventions
 
 - Install: `npm ci`. Run: `npm start`. Package: `npm run package`. Installer: `npm run make` (the Squirrel Setup.exe must be built on Windows).
-- Unit tests: `npm test` (`node --test src/**/*.test.js`). 91 tests, all passing on macOS on 2026-10-09. Node 22+ expands the glob itself, so it also works from cmd and PowerShell.
+- Unit tests: `npm test` (`node --test src/**/*.test.js`). 94 tests, all passing on macOS on 2026-10-09. Node 22+ expands the glob itself, so it also works from cmd and PowerShell.
 - Electron smoke tests: `npm run test:electron` and `npm run test:windows` (Playwright `_electron`; they launch the app from source and check that the window renders and can hide and restore; the Windows one is skipped elsewhere). Neither has run on Windows yet.
 - Type check: `npm run typecheck` (`tsc -p jsconfig.performance.json`).
 - Format only the files you change: `npx prettier --write <files>`. Settings are in `.prettierrc`: 4-space indent, print width 150, semicolons, single quotes. `src/assets` and `node_modules` are ignored.
 - Commit messages: short, with `feat:`, `fix:`, `docs:`, `perf:` or `chore:`.
-- This repository is public. Never commit `%APPDATA%\cheating-daddy-config`, `credentials.json`, API keys, `node_modules`, `out/` or temporary debug edits such as DevTools lines and extra logs.
+- Never commit `%APPDATA%\cheating-daddy-config`, `credentials.json`, API keys, `node_modules`, `out/` or temporary debug edits such as DevTools lines and extra logs. The repository is private now, but it was public until 2026-10-09.
 - Upstream changes: cherry-pick from sohzm/cheating-daddy, inspect the diff, keep messages short, then run the app.
 
 macOS notes:
@@ -482,4 +489,5 @@ Add an entry after each session: date, machine, what you ran, what you saw, what
 - 2026-10-07, Mac: plain-voice prompt and profile text (section 7, change 6). Tested with a 12-question battery and in the real app. Not yet run on Windows.
 - 2026-10-07, Mac: answer length now depends on the question (section 7, change 7). Tested with 30 interview questions, three simulated interviewer reviews and the real app. Not yet run on Windows.
 - 2026-10-07, Mac: answers come from GPT-6 Astra through OpenRouter with a Gemini fallback (section 7, change 8). Tested end to end on the Mac, including the fallback. Not yet run on Windows; the OpenRouter key must be entered there.
-- 2026-10-09, Mac: two answer screens, coding mode and the answer model switch (section 7, change 11). Normal questions tested in the real app. The coding round still needs a real-app run with the problem visible on screen. Not yet run on Windows.
+- 2026-10-09, Mac: two answer screens, coding mode and the answer model switch (section 7, change 11). Normal questions tested in the real app. Not yet run on Windows.
+- 2026-10-09, Mac: type-along for coding steps (section 7, change 12). A full coding round ran in the real app with GPT-6 Astra: new problem from a screenshot, Part 1, Part 2, two code steps, a spoken counter-question and exit. Not yet run on Windows.
