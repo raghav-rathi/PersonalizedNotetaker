@@ -144,6 +144,8 @@ export class HelpView extends LitElement {
             codingFullCode: isMac ? 'Cmd+Alt+5' : 'Alt+Shift+5',
             codingDryRun: isMac ? 'Cmd+Alt+6' : 'Alt+Shift+6',
             codingExit: isMac ? 'Cmd+Alt+9' : 'Alt+Shift+9',
+            typeAlongBack: isMac ? 'Cmd+Alt+Up' : 'Alt+Shift+Up',
+            typeAlongNext: isMac ? 'Cmd+Alt+Down' : 'Alt+Shift+Down',
         };
     }
 
@@ -177,6 +179,8 @@ export class HelpView extends LitElement {
             ['Coding: Full Code', this.keybinds.codingFullCode],
             ['Coding: Dry Run', this.keybinds.codingDryRun],
             ['Coding: Exit', this.keybinds.codingExit],
+            ['Type-along: Line Back', this.keybinds.typeAlongBack],
+            ['Type-along: Line Forward', this.keybinds.typeAlongNext],
         ];
 
         return html`

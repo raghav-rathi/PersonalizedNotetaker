@@ -1,7 +1,7 @@
 const { BrowserWindow, globalShortcut, ipcMain, screen, Menu } = require('electron');
 const path = require('node:path');
 const storage = require('../storage');
-const { startOptionTapMonitor, stopOptionTapMonitor } = require('./optionTapMonitor');
+const { startOptionTapMonitor, stopOptionTapMonitor, setEnterListener } = require('./optionTapMonitor');
 const { handleCodingCommand } = require('./gemini');
 const {
     canRegisterGlobalShortcut,
@@ -273,6 +273,9 @@ function getDefaultKeybinds() {
         codingFullCode: isMac ? 'Cmd+Alt+5' : 'Alt+Shift+5',
         codingDryRun: isMac ? 'Cmd+Alt+6' : 'Alt+Shift+6',
         codingExit: isMac ? 'Cmd+Alt+9' : 'Alt+Shift+9',
+        // Type-along: move the highlighted line back or forward when it gets out of step with the editor.
+        typeAlongBack: isMac ? 'Cmd+Alt+Up' : 'Alt+Shift+Up',
+        typeAlongNext: isMac ? 'Cmd+Alt+Down' : 'Alt+Shift+Down',
     };
 }
 
@@ -451,6 +454,8 @@ function updateGlobalShortcuts(keybinds, mainWindow, sendToRenderer, geminiSessi
         codingFullCode: () => runCodingCommand('full'),
         codingDryRun: () => runCodingCommand('dryrun'),
         codingExit: () => runCodingCommand('exit'),
+        typeAlongBack: () => sendToRenderer('type-along-move', -1),
+        typeAlongNext: () => sendToRenderer('type-along-move', 1),
     };
     for (const [action, run] of Object.entries(commandActions)) {
         const keybind = keybinds[action];
@@ -526,6 +531,12 @@ function setupWindowIpcHandlers(mainWindow, sendToRenderer, geminiSessionRef) {
         if (!mainWindow.isDestroyed()) {
             updateGlobalShortcuts(newKeybinds, mainWindow, sendToRenderer, geminiSessionRef);
         }
+    });
+
+    // The overlay reports when type-along is showing; only then do Enter presses in other apps reach it.
+    ipcMain.on('type-along-active', (event, active) => {
+        const { sendToRenderer } = windowIpcContext || {};
+        setEnterListener(active && sendToRenderer ? () => sendToRenderer('type-along-enter') : null);
     });
 
     ipcMain.handle('toggle-window-visibility', async event => {

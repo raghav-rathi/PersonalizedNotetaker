@@ -475,6 +475,9 @@ export class CheatingDaddyApp extends LitElement {
         this._unseen = { main: 0, side: 0 };
         this._trimmed = { main: 0, side: 0 };
         this._screenViewCache = null;
+        // Type-along: the line reached in each coding card, by turn id, and whether Enter is being listened to.
+        this._typeAlongLine = new Map();
+        this._typeAlongActive = false;
 
         this._loadFromStorage();
         this._checkForUpdates();
@@ -554,6 +557,13 @@ export class CheatingDaddyApp extends LitElement {
                 this.codingMode = Boolean(data?.active);
             });
             ipcRenderer.on('switch-answer-screen', (_, screen) => this.switchScreen(screen));
+            // Enter in the overlay's own message box sends a message; it is not a line typed in the editor.
+            ipcRenderer.on('type-along-enter', () => {
+                const view = this.shadowRoot?.querySelector('assistant-view');
+                if (document.hasFocus() && view?.shadowRoot?.activeElement?.id === 'textInput') return;
+                this._moveTypeAlong(1);
+            });
+            ipcRenderer.on('type-along-move', (_, delta) => this._moveTypeAlong(delta));
         }
 
         this._optionHeld = false;
@@ -604,6 +614,9 @@ export class CheatingDaddyApp extends LitElement {
             ipcRenderer.removeAllListeners('stealth-hidden-changed');
             ipcRenderer.removeAllListeners('coding-mode-changed');
             ipcRenderer.removeAllListeners('switch-answer-screen');
+            ipcRenderer.removeAllListeners('type-along-enter');
+            ipcRenderer.removeAllListeners('type-along-move');
+            ipcRenderer.send('type-along-active', false);
         }
         if (this._answerFlushTimer) clearTimeout(this._answerFlushTimer);
     }
@@ -739,6 +752,25 @@ export class CheatingDaddyApp extends LitElement {
         return view;
     }
 
+    // Type-along follows the focused card on the main screen while coding mode is on.
+    _typeAlongView() {
+        if (!this.codingMode || this.activeScreen !== 'main' || this.currentView !== 'assistant') return null;
+        const turnId = this._screenFocus.main;
+        const index = this._answerTurnIds.indexOf(turnId);
+        if (index < 0) return null;
+        const { typedLines } = window.require('./utils/typeAlong');
+        const lines = typedLines(this.responses[index]);
+        if (!lines.length) return null;
+        return { turnId, lines, line: Math.min(this._typeAlongLine.get(turnId) || 0, lines.length) };
+    }
+
+    _moveTypeAlong(delta) {
+        const view = this._typeAlongView();
+        if (!view) return;
+        this._typeAlongLine.set(view.turnId, Math.max(0, Math.min(view.lines.length, view.line + delta)));
+        this.requestUpdate();
+    }
+
     handleAnswerEvent(event) {
         if (event.event === 'start') {
             this._applyAnswerEvent(event);
@@ -868,6 +900,7 @@ export class CheatingDaddyApp extends LitElement {
         this._trimmed = { main: 0, side: 0 };
         this.activeScreen = 'main';
         this.codingMode = false;
+        this._typeAlongLine.clear();
         this.startTime = Date.now();
         this.sessionActive = true;
         this.currentView = 'assistant';
@@ -960,6 +993,13 @@ export class CheatingDaddyApp extends LitElement {
             const { ipcRenderer } = window.require('electron');
             ipcRenderer.send('view-changed', this.currentView);
         }
+
+        // Enter presses in other apps reach the overlay only while type-along is showing.
+        const typeAlongActive = Boolean(this._typeAlongView());
+        if (typeAlongActive !== this._typeAlongActive && window.require) {
+            this._typeAlongActive = typeAlongActive;
+            window.require('electron').ipcRenderer.send('type-along-active', typeAlongActive);
+        }
     }
 
     // ── Helpers ──
@@ -1032,6 +1072,7 @@ export class CheatingDaddyApp extends LitElement {
                         .selectedProfile=${this.selectedProfile}
                         .onSendText=${msg => this.handleSendText(msg)}
                         .shouldAnimateResponse=${this.shouldAnimateResponse}
+                        .typeAlong=${this._typeAlongView()}
                         @response-index-changed=${this.handleResponseIndexChanged}
                         @response-animation-complete=${() => {
                             this.shouldAnimateResponse = false;

@@ -11,6 +11,10 @@ let optionHeld = false;
 let usedAsModifier = false;
 let onOptionTap = null;
 let ignoreUntil = 0;
+// Type-along moves to the next line when the user presses Enter in any app; set only while it shows.
+let onEnter = null;
+// uiohook key codes for Enter and the keypad's Enter.
+const ENTER_KEYCODES = new Set([28, 3612]);
 
 function loadHook() {
     if (hookLoadAttempted) return hookApi;
@@ -35,6 +39,8 @@ function handleKeyDown(event) {
     if (optionHeld) {
         usedAsModifier = true;
     }
+    // Cmd/Ctrl/Alt+Enter are shortcuts (run code, Analyze Screen), not a new line.
+    if (onEnter && ENTER_KEYCODES.has(event.keycode) && !event.metaKey && !event.ctrlKey && !event.altKey) onEnter();
 }
 
 function handleKeyUp(event) {
@@ -112,7 +118,13 @@ function stopOptionTapMonitor() {
     hookStarted = false;
 }
 
+/** @param {(() => void) | null} listener */
+function setEnterListener(listener) {
+    onEnter = listener;
+}
+
 module.exports = {
     startOptionTapMonitor,
     stopOptionTapMonitor,
+    setEnterListener,
 };

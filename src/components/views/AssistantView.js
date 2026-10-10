@@ -283,6 +283,48 @@ export class AssistantView extends LitElement {
             background: #444444;
         }
 
+        /* ── Type-along: the line to type now, with the one before and after ── */
+
+        .type-along {
+            flex-shrink: 0;
+            border-top: 1px solid var(--border);
+            background: var(--bg-surface);
+            padding: var(--space-xs) var(--space-md);
+        }
+
+        .type-along * {
+            font-family: var(--font-mono);
+        }
+
+        .type-along-head {
+            display: flex;
+            justify-content: space-between;
+            font-size: var(--font-size-xs);
+            color: var(--text-muted);
+            user-select: none;
+        }
+
+        .type-along-line {
+            white-space: pre;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            font-size: 13px;
+            line-height: 1.5;
+            padding-left: 8px;
+            color: var(--text-secondary);
+        }
+
+        .type-along-line.before {
+            opacity: 0.45;
+        }
+
+        .type-along-line.current {
+            font-size: 15px;
+            color: var(--text-primary);
+            border-left: 2px solid var(--accent);
+            padding-left: 6px;
+        }
+
         /* ── Bottom input bar ── */
 
         .input-bar {
@@ -389,6 +431,8 @@ export class AssistantView extends LitElement {
         shouldAnimateResponse: { type: Boolean },
         isAnalyzing: { type: Boolean, state: true },
         _showJumpToLatest: { type: Boolean, state: true },
+        // {lines, line} from the app root while coding mode shows a card with code, else null
+        typeAlong: { type: Object },
     };
 
     constructor() {
@@ -401,6 +445,7 @@ export class AssistantView extends LitElement {
         this.selectedProfile = 'interview';
         this.onSendText = () => {};
         this.isAnalyzing = false;
+        this.typeAlong = null;
         this._animFrame = null;
         this._showJumpToLatest = false;
         this._cardCount = 0;
@@ -413,6 +458,8 @@ export class AssistantView extends LitElement {
         // Each screen keeps its own scroll position, so switching back returns to the same line.
         this._renderedScreen = null;
         this._scrollTops = { main: 0, side: 0 };
+        // The new card being kept at the top of the view while it streams in, or -1.
+        this._pinnedCard = -1;
     }
 
     getProfileNames() {
@@ -493,6 +540,7 @@ export class AssistantView extends LitElement {
     }
 
     _emitFocusedIndex(index) {
+        this._pinnedCard = -1;
         this.currentResponseIndex = index;
         this.dispatchEvent(
             new CustomEvent('response-index-changed', {
@@ -526,13 +574,22 @@ export class AssistantView extends LitElement {
         }
     }
 
-    // Puts the first line of a new answer at the top, so reading starts at its beginning.
+    // Puts the first line of a new answer at the top, so reading starts at its beginning. A new answer is
+    // too short to scroll that far at first, so the view follows it until its top reaches the top.
     revealCard(index) {
+        this._pinnedCard = index;
+        this._followPinnedCard();
+    }
+
+    _followPinnedCard() {
+        if (this._pinnedCard < 0) return;
         const container = this._getContainer();
-        const card = container?.querySelector(`[data-answer-index="${index}"]`);
+        const card = container?.querySelector(`[data-answer-index="${this._pinnedCard}"]`);
         if (!card) return;
         const padding = parseFloat(getComputedStyle(container).paddingTop) || 0;
-        container.scrollTop += card.getBoundingClientRect().top - container.getBoundingClientRect().top - padding;
+        const offset = () => card.getBoundingClientRect().top - container.getBoundingClientRect().top - padding;
+        container.scrollTop += offset();
+        if (Math.abs(offset()) < 2) this._pinnedCard = -1;
     }
 
     jumpToLatest() {
@@ -543,6 +600,7 @@ export class AssistantView extends LitElement {
     }
 
     scrollResponseUp() {
+        this._pinnedCard = -1;
         const container = this.shadowRoot.querySelector('.response-container');
         if (container) {
             const scrollAmount = container.clientHeight * 0.3;
@@ -551,6 +609,7 @@ export class AssistantView extends LitElement {
     }
 
     scrollResponseDown() {
+        this._pinnedCard = -1;
         const container = this.shadowRoot.querySelector('.response-container');
         if (container) {
             const scrollAmount = container.clientHeight * 0.3;
@@ -781,11 +840,14 @@ export class AssistantView extends LitElement {
 
     firstUpdated() {
         super.firstUpdated();
+        // Scrolling by hand takes over from following a new answer.
+        this._getContainer()?.addEventListener('wheel', () => (this._pinnedCard = -1), { passive: true });
         this._syncTranscript();
     }
 
     willUpdate(changedProperties) {
         if (changedProperties.has('screen') && this._renderedScreen) {
+            this._pinnedCard = -1;
             const container = this._getContainer();
             if (container) this._scrollTops[this._renderedScreen] = container.scrollTop;
         }
@@ -937,6 +999,7 @@ export class AssistantView extends LitElement {
 
         this._updateFocusedCard();
         container.scrollTop = scrollTop;
+        this._followPinnedCard();
         if (previousCount !== this._cardCount || !this._latestObserver) {
             this._observeLatest();
         }
@@ -944,6 +1007,23 @@ export class AssistantView extends LitElement {
         if (this.shouldAnimateResponse) {
             this.dispatchEvent(new CustomEvent('response-animation-complete', { bubbles: true, composed: true }));
         }
+    }
+
+    _renderTypeAlong() {
+        if (!this.typeAlong) return '';
+        const { lines, line } = this.typeAlong;
+        if (line >= lines.length) {
+            return html`<div class="type-along">
+                <div class="type-along-head"><span>Type along</span><span>all ${lines.length} lines typed</span></div>
+                <div class="type-along-line">Done. Next step when you're ready.</div>
+            </div>`;
+        }
+        return html`<div class="type-along">
+            <div class="type-along-head"><span>Type along: say it, type it, press Enter</span><span>line ${line + 1} of ${lines.length}</span></div>
+            ${line > 0 ? html`<div class="type-along-line before">${lines[line - 1]}</div>` : ''}
+            <div class="type-along-line current">${lines[line]}</div>
+            ${line + 1 < lines.length ? html`<div class="type-along-line">${lines[line + 1]}</div>` : ''}
+        </div>`;
     }
 
     render() {
@@ -954,6 +1034,8 @@ export class AssistantView extends LitElement {
                     Jump to latest
                 </button>
             </div>
+
+            ${this._renderTypeAlong()}
 
             <div class="input-bar">
                 <div class="input-bar-inner">
