@@ -41,6 +41,8 @@ A real-time AI assistant that provides contextual help during video calls, inter
 
 ### How answers are written (Use your API keys mode)
 
+For a step-by-step guide to using the app in an interview, including a coding round, see [docs/how-to-use.md](docs/how-to-use.md).
+
 Gemini Live (`gemini-3.8-live`) only listens and transcribes. Every question, spoken or typed, is answered by a text model, so answers are full written text rather than a transcript of Live's short spoken reply:
 
 - With an **OpenRouter API key** on the main screen, the model picked under **Answer Model** writes the answers. A change applies from the next session.
