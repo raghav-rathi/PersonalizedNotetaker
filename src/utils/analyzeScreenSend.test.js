@@ -78,7 +78,13 @@ test('screen analysis uses gemini-3.8-flash with instructions in the system prom
 test('screen analysis falls back to a default request without context', () => {
     const { buildScreenAnalysisRequest } = require('./analyzeScreenSend');
     const request = buildScreenAnalysisRequest({ data: 'img' });
-    assert.equal(request.contents[0].parts[1].text, 'Request: Answer the question or task shown on this screenshot.');
+    assert.equal(
+        request.contents[0].parts[1].text,
+        'Request: Teach the logic in plain words, then give the answer for what is on this screenshot.'
+    );
+    assert.match(request.config.systemInstruction, /Teach the logic in plain words first/);
+    assert.match(request.config.systemInstruction, /If the screenshot is a coding task/);
+    assert.match(request.config.systemInstruction, /If it is anything else/);
 });
 
 test('Live screen context adds the image and analysis without completing a turn', () => {

@@ -6,20 +6,19 @@ module.exports = {
         asar: {
             unpack: '**/{onnxruntime-node,onnxruntime-common,@huggingface/transformers,sharp,@img,uiohook-napi}/**',
         },
-        extraResource: ['./src/assets/SystemAudioDump'],
-        name: 'Cheating Daddy',
-        icon: 'src/assets/logo',
-        // use `security find-identity -v -p codesigning` to find your identity
-        // for macos signing
-        // also fuck apple
-        // osxSign: {
-        //    identity: '<paste your identity here>',
-        //   optionsForFile: (filePath) => {
-        //       return {
-        //           entitlements: 'entitlements.plist',
-        //       };
-        //   },
-        // },
+        extraResource: ['./src/assets/NotetakerAudio'],
+        name: 'Personalized Notetaker',
+        appBundleId: 'com.personalized.notetaker',
+        icon: 'src/assets/notetaker',
+        // Ad-hoc signature, reused for this copy so macOS permission grants stick.
+        // Hardened runtime stays off: it needs an Apple Developer ID or the app will not launch.
+        osxSign: {
+            identity: '-',
+            optionsForFile: () => ({
+                entitlements: 'entitlements.plist',
+                hardenedRuntime: false,
+            }),
+        },
         // notarize if off cuz i ran this for 6 hours and it still didnt finish
         // osxNotarize: {
         //    appleId: 'your apple id',

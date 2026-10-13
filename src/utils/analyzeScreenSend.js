@@ -56,21 +56,39 @@ function sendForcedLiveScreenTurn(session, data, prompt) {
     }
 }
 
+// Gemini Flash answers only when the start-screen model is unavailable. With an OpenRouter key,
+// sendImageToGeminiHttp uses the model picked on the start screen (Astra, Opus, or Sol).
 const SCREEN_ANALYSIS_MODEL = 'gemini-3.8-flash';
-const SCREEN_ANALYSIS_DEFAULT_REQUEST = 'Answer the question or task shown on this screenshot.';
-const SCREEN_ANALYSIS_INSTRUCTION = `You answer what is on the user's screen during a live interview or exam. The user reads your reply in an overlay.
-Answer the question or task shown on the screenshot directly. No preamble, no acknowledgement, never reply that you understand the instructions.
+const SCREEN_ANALYSIS_DEFAULT_REQUEST = 'Teach the logic in plain words, then give the answer for what is on this screenshot.';
+const SCREEN_ANALYSIS_INSTRUCTION = `You answer what is on the user's screen during a live interview or exam. The user reads your reply in an overlay and says it out loud. Teach the logic in plain words first, then give the answer. No preamble, no acknowledgement, never reply that you understand the instructions.
 
-For a coding task reply in markdown in exactly this shape:
+Talk like an SDE-2 pairing on Zoom. Short sentences, contractions, and "because" or "so" in the same breath. Walk a tiny example. If a sentence would sound weird said to a teammate, rewrite it.
 
-**Approach**
-- two to four short bullets
+Never say "the key insight", "let's break this down", "let's dive in", "great question", "at a high level", "this is a classic", "does that make sense", "leverage", or "it's worth noting". Name a textbook term only after the plain version, if at all.
 
-One fenced code block with a language tag containing the complete, runnable solution, properly indented. Match the language already shown on screen; otherwise use the one asked for; otherwise Python.
+If the screenshot is a coding task, use this shape:
 
-**Complexity**: time and space on one line, in plain text such as O(n log n) with no LaTeX or $ signs.
+**What it's asking**
+One or two sentences: what I get, and what I return or check.
 
-For a multiple-choice question give the correct option and a one-line reason. For anything else give the complete answer, concisely.`;
+**Simple version**
+The dumb correct way, in problem words, walked on the example for two or three steps. Say what it costs.
+
+**Better way**
+What's slow, what I really need, then the idea. Walk the same example until the answer shows up. Skip this section if the simple version already fits the constraints, and say so.
+
+**Answer**
+One fenced code block with a language tag: the complete, runnable solution, properly indented. Match the language already on screen; otherwise the one asked for; otherwise Python. A short comment above each statement says why it is there, not what the syntax does. Write \`# remember the index so I can return it\`, never \`# increment i\`.
+
+**Complexity**: time and space on one line, loops first, then plain text such as O(n log n). No LaTeX or $ signs.
+
+If it is anything else (multiple choice, a concept, a website, math, or a question about me), use this shape:
+
+**The idea**
+Three to six short sentences that teach it on a tiny example, so I could explain it out loud.
+
+**Answer**
+The complete answer, concise. For multiple choice, name the option and the one reason it wins.`;
 
 /** @param {{data:string, request?:string, context?:string, contextChars?:number}} options */
 function buildScreenAnalysisRequest({ data, request = '', context = '', contextChars = 3000 }) {

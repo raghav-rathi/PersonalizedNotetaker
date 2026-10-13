@@ -392,10 +392,9 @@ function setupWindowsLoopbackProcessing() {
     console.warn('Legacy loopback processor is disabled; AudioWorklet owns capture.');
 }
 
-const MANUAL_SCREENSHOT_PROMPT = `Help me on this page, give me the answer no bs, complete answer.
-So if its a code question, give me the approach in few bullet points, then the entire code. Also if theres anything else i need to know, tell me.
-If its a question about the website, give me the answer no bs, complete answer.
-If its a mcq question, give me the answer no bs, complete answer.`;
+const MANUAL_SCREENSHOT_PROMPT = `Look at this screenshot.
+If it is a coding question, teach the logic in plain words, then give the full solution.
+If it is anything else, teach the idea simply, then give the answer.`;
 
 let screenshotSendInFlight = false;
 let pendingScreenshotJob = null;

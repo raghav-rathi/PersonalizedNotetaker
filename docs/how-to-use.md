@@ -41,14 +41,14 @@ Read every answer before you say it. The model can still add a detail that isn't
 ## A coding round, step by step
 
 1. **Put the problem on screen**, in front of other windows. The app reads it from a screenshot.
-2. **Press `Cmd+Option+1`.** Coding mode starts and **Part 1** appears. Part 1 restates the problem in your words, walks the example, asks a few questions, and gives a simple version with its cost.
+2. **Press `Cmd+Option+1`.** Coding mode starts and **Part 1** appears on **Main**. That card is what you say and type. A lesson for the same step appears on **Follow-ups**. The overlay stays on Main, and the Follow-ups tab shows a new count. `Cmd+Option+Right` opens the lesson. `Cmd+Option+Left` returns to the same Main card.
 3. **Say Part 1 and type the pad.** The strip under the answer shows one line to type at a time (see "Type-along").
 4. **When the interviewer answers your questions**, the app hears it. You don't need to do anything.
 5. **When they ask "can you do better?"**, Part 2 (the better approach) appears by itself. You can also press `Cmd+Option+2`.
 6. **When they say "go ahead and code it"**, the first code step appears. You can also press `Cmd+Option+3`.
 7. **Type the code with type-along**, saying each line's comment as you type it.
 8. **Press `Cmd+Option+4` for the next step.** Repeat until the code is done.
-9. **When they ask a question about your code** ("why a heap?", "what if the array is empty?"), a short answer appears on Follow-ups. If the answer changes code you already typed, the fixed step shows up on Main as "Changed after ...". Your place on Main stays where it was.
+9. **When they ask a question about your code** ("why a heap?", "what if the array is empty?"), a short answer titled **They asked** appears on Follow-ups and the overlay jumps there. The lesson cards stay in the list above it. If the answer changes code you already typed, the fixed step shows up on Main as "Changed after ...". Your place on Main stays where it was.
 10. **To walk through an example**, press `Cmd+Option+6` (dry run), or just let the interviewer ask for it. **For the whole function**, press `Cmd+Option+5`.
 11. **When the round is over**, press `Cmd+Option+9` or type `exit`. Normal answers come back.
 

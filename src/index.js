@@ -38,6 +38,9 @@ function showMainWindow() {
 }
 
 function createTray() {
+    // On macOS a Tray icon sits in the menu bar next to Wi-Fi. The window is already
+    // in the Dock, and Option-tap shows it again, so the logo there only gives the app away.
+    if (process.platform === 'darwin') return;
     if (tray) return;
     const icon = path.join(__dirname, 'assets', process.platform === 'win32' ? 'logo.ico' : 'logo.png');
     tray = new Tray(icon);
@@ -111,6 +114,7 @@ app.whenReady().then(async () => {
     }
 
     createMainWindow();
+    if (process.platform === 'darwin' && app.dock) app.dock.hide();
     createTray();
     stopDiagnostics = startDiagnostics({ app, BrowserWindow, directory: path.join(app.getPath('logs'), 'diagnostics') });
     setupGeminiIpcHandlers(geminiSessionRef);

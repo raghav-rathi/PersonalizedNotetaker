@@ -34,7 +34,7 @@ const { LiveTurnWatchdog } = require('./liveTurnWatchdog');
 const { formatLiveAnswerText, formatAnswerForDisplay } = require('./answerFormatting');
 const { nextVoiceQuestion, questionText } = require('./questionMerge');
 const { streamOpenRouterAnswer, answerWithFallback, toGeminiContents, answerModelById } = require('./answerModel');
-const { LANE_INSTRUCTION, parseLaneHeader, splitSideUpdate, isReplaceableAnswer, resolveLane, isBackchannel } = require('./answerLanes');
+const { LANE_INSTRUCTION, parseLaneHeader, splitSideUpdate, splitMainLesson, isReplaceableAnswer, resolveLane, isBackchannel } = require('./answerLanes');
 const { CODING_COMMANDS, EXIT_WORDS, NEW_PROBLEM_WORDS, loadCodingSkill, CodingSession } = require('./codingSession');
 
 // Lazy-loaded to avoid circular dependency (localai.js imports from gemini.js)
@@ -695,10 +695,16 @@ async function streamLanedAnswer({
     let lane = null;
     let card = null;
     let changedCard = null;
+    let lessonCard = null;
     let shown = '';
     let firstTextAt = 0;
 
-    const split = body => (lane === 'side' && codingTurn ? splitSideUpdate(body) : { answer: body, update: null });
+    const split = body => {
+        if (!codingTurn) return { answer: body, update: null, lesson: null };
+        if (lane === 'side') return { ...splitSideUpdate(body), lesson: null };
+        const { answer, lesson } = splitMainLesson(body);
+        return { answer, update: null, lesson };
+    };
     const show = raw => {
         if (signal.aborted) return;
         if (codingTurn) codingTurn.reply = raw;
@@ -714,7 +720,7 @@ async function streamLanedAnswer({
             claimLane(request, lane, question);
             card = createAnswerStream('answer', { turnId, sequenceBase, lane, label: shortLabel(label) });
         }
-        const { answer, update } = split(header.body);
+        const { answer, update, lesson } = split(header.body);
         if (answer.trim()) {
             firstTextAt ||= Date.now();
             shown = formatAnswerForDisplay(answer);
@@ -729,6 +735,15 @@ async function streamLanedAnswer({
                 focus: false,
             });
             changedCard.update(formatAnswerForDisplay(update));
+        }
+        if (lesson?.trim()) {
+            lessonCard ||= createAnswerStream('lesson', {
+                sequenceBase,
+                lane: 'side',
+                label: `Lesson: ${shortLabel(label, 50)}`,
+                focus: false,
+            });
+            lessonCard.update(formatAnswerForDisplay(lesson));
         }
     };
 
@@ -784,11 +799,12 @@ async function streamLanedAnswer({
     }
 
     const body = parseLaneHeader(`${result.text}\n`).body.trim();
-    const { answer, update } = split(body);
+    const { answer, update, lesson } = split(body);
     if (shown) card.complete(formatAnswerForDisplay(answer.trim()));
     if (changedCard && update) changedCard.complete(formatAnswerForDisplay(update.trim()));
+    if (lessonCard && lesson?.trim()) lessonCard.complete(formatAnswerForDisplay(lesson.trim()));
     if (codingTurn) codingTurn.reply = result.text;
-    recordConversationTurn(question, body);
+    recordConversationTurn(question, (answer || body).trim());
     if (result.primaryError) console.warn(`OpenRouter answer failed (${result.primaryError.message}); Gemini answered instead`);
     const model = openRouterKey && !result.usedFallback ? answerModel.id : GEMINI_ANSWER_MODEL;
     const cost = result.cost ? `, $${result.cost.toFixed(4)}` : '';
@@ -1748,7 +1764,7 @@ function killExistingSystemAudioDump() {
         console.log('Checking for existing SystemAudioDump processes...');
 
         // Kill any existing SystemAudioDump processes
-        const killProc = spawn('pkill', ['-x', 'SystemAudioDump'], {
+        const killProc = spawn('pkill', ['-x', 'NotetakerAudio'], {
             stdio: 'ignore',
         });
 
@@ -1787,9 +1803,9 @@ async function startMacOSAudioCapture(geminiSessionRef) {
 
     let systemAudioPath;
     if (app.isPackaged) {
-        systemAudioPath = path.join(process.resourcesPath, 'SystemAudioDump');
+        systemAudioPath = path.join(process.resourcesPath, 'NotetakerAudio');
     } else {
-        systemAudioPath = path.join(__dirname, '../assets', 'SystemAudioDump');
+        systemAudioPath = path.join(__dirname, '../assets', 'NotetakerAudio');
     }
 
     console.log('SystemAudioDump path:', systemAudioPath);
@@ -2046,41 +2062,65 @@ async function sendImageToGeminiHttp(base64Data, request) {
     const records = [...conversationHistory, ...screenAnalysisHistory].sort((a, b) => a.timestamp - b.timestamp);
     const context = buildRelevantContext({ query: request, summary: currentSummary, records });
     const screenRequest = buildScreenAnalysisRequest({ data: base64Data, request, context });
+    const userText = screenRequest.contents[0].parts.find(part => part.text)?.text || '';
+    const messages = [{ role: 'user', text: userText, imageJpeg: base64Data }];
+    const systemPrompt = screenRequest.config.systemInstruction;
+    const openRouterKey = getOpenRouterApiKey();
+    const abort = new AbortController();
+
+    let fullText = '';
+    const show = text => {
+        if (!fullText) markMainAnswer('Analyze Screen: the screenshot of my screen');
+        fullText = text;
+        answer.update(text);
+    };
+    const gemini = ({ signal, onText }) => streamGeminiAnswer({ apiKey, systemPrompt, messages, signal, onText });
 
     try {
-        console.log(`Sending image to ${screenRequest.model} (streaming)...`);
-        const response = await getTextModelClient(apiKey).models.generateContentStream(screenRequest);
+        const asked = openRouterKey ? answerModel.id : GEMINI_ANSWER_MODEL;
+        console.log(`Sending image to ${asked} (streaming)...`);
+        const result = openRouterKey
+            ? await answerWithFallback({
+                  primary: ({ signal, onText }) =>
+                      streamOpenRouterAnswer({
+                          apiKey: openRouterKey,
+                          model: answerModel,
+                          systemPrompt,
+                          messages,
+                          maxTokens: ANSWER_MAX_OUTPUT_TOKENS,
+                          signal,
+                          onText,
+                      }),
+                  fallback: gemini,
+                  signal: abort.signal,
+                  onText: show,
+                  firstTextTimeoutMs: answerModel.firstTextMs,
+              })
+            : { ...(await gemini({ signal: abort.signal, onText: show })), usedFallback: false };
 
-        let fullText = '';
-        for await (const chunk of response) {
-            if (chunk.text) {
-                if (!fullText) markMainAnswer('Analyze Screen: the screenshot of my screen');
-                fullText += chunk.text;
-                answer.update(fullText);
-            }
-        }
-
-        console.log(`Image response completed from ${screenRequest.model}`);
-
-        if (!fullText.trim()) {
+        const text = String(result.text || fullText).trim();
+        if (!text) {
             return { success: false, error: 'Screen analysis returned no text' };
         }
-        answer.complete(fullText.trim());
+        answer.complete(text);
 
         // Inject screen analysis into Groq context for follow-up voice questions
         groqConversationHistory.push({
             role: 'user',
-            content: `[Screen context]: ${fullText.trim()}`,
+            content: `[Screen context]: ${text}`,
         });
         if (groqConversationHistory.length > 20) {
             groqConversationHistory = groqConversationHistory.slice(-20);
         }
 
-        saveScreenAnalysis(request || 'Analyze Screen', fullText, screenRequest.model);
+        if (result.primaryError) console.warn(`OpenRouter screen analysis failed (${result.primaryError.message}); Gemini answered instead`);
+        const model = openRouterKey && !result.usedFallback ? answerModel.id : GEMINI_ANSWER_MODEL;
+        console.log(`Image response completed from ${model}`);
+        saveScreenAnalysis(request || 'Analyze Screen', text, model);
 
-        return { success: true, text: fullText, model: screenRequest.model };
+        return { success: true, text, model };
     } catch (error) {
-        console.error('Error sending image to Gemini HTTP:', error);
+        console.error('Error sending image for screen analysis:', error);
         return { success: false, error: error.message };
     }
 }
