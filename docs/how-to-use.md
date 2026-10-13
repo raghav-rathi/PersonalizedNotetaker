@@ -13,7 +13,7 @@ This guide is for macOS. Windows keys are listed too, but they haven't been trie
     - **Gemini API key** (required). Gemini listens to the call and writes down what the interviewer says.
     - **OpenRouter API key**. With it, the model you pick under **Answer Model** writes the answers.
     - **Answer Model**. GPT-6 Astra is the default. See "Which answer model" below.
-5. Open **AI Customization** in the sidebar and paste `docs/prompts/interview-prompt.txt` into **Custom Instructions**. It holds your background and the way answers should sound.
+5. Open **AI Customization** in the sidebar and paste `docs/prompts/interview-prompt.txt` into **Custom Instructions**. It makes the app answer like an SDE-2 candidate, in the steps below, with no personal background.
 6. In **Settings**, set **Audio Mode** to **Speaker Only (Interviewer)**.
 
 ## Starting a session
@@ -30,13 +30,15 @@ The app asks the system to keep the overlay out of screen sharing and screenshot
 
 You don't need to press anything. When the interviewer finishes a question, the answer starts appearing on **Main** within a few seconds.
 
-- **Follow-up questions** ("why?", "what if...", "how is that different from...") get a short answer on the **Follow-ups** screen, and the overlay jumps there by itself. Press `Cmd+Option+Left` to go back to Main. You land on the same answer, scrolled to where you were.
-- **"Okay", "mm-hmm", "sounds good"** get no answer.
+- **A coding question** is answered in steps. First the problem in your own words. Then clarifying questions, but only ones whose answer changes the solution; if there are some, the answer stops there. When the interviewer answers them (even with just "yes"), the next answer gives the brute force and why it works, then the optimized approach with a walk through the example, its cost and pseudocode, and asks whether to start coding. If there are no good questions, all of that comes in the first answer.
+- **"Can you do better?"**, **"go ahead and code it"** and **"walk me through an example"** continue on Main.
+- **Follow-up questions** ("why a hash map?", "what if...", "how is that different from...") get their own answer on the **Follow-ups** screen, and the overlay jumps there by itself. Press `Cmd+Option+Left` to go back to Main. You land on the same answer, scrolled to where you were.
+- **"Okay", "mm-hmm", "sounds good"** get no answer, unless the last answer asked the interviewer something.
 - **If the interviewer pauses mid-question**, the app waits and answers the whole question in one card. Once an answer has been on screen for 5 seconds, it never changes under you.
 - **To ask something yourself**, type it in the box at the bottom and press Enter.
-- **Analyze Screen** (`Cmd+Enter`) reads your screen and answers what's on it.
+- **Analyze Screen** (`Cmd+Enter`) sends a screenshot of your main display and answers what's on it the same way. Later questions can see that screenshot too.
 
-Read every answer before you say it. The model can still add a detail that isn't in your background.
+The app remembers the whole session, like a ChatGPT chat, so later answers build on earlier ones. Read every answer before you say it: the model can still get a detail wrong.
 
 ## A coding round, step by step
 

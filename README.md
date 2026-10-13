@@ -53,6 +53,8 @@ Gemini Live (`gemini-3.8-live`) only listens and transcribes. Every question, sp
 
 Live's own reply stays hidden unless both fail. If the interviewer pauses mid-question, speech that arrives within 12 seconds is treated as the same question, but only while its answer is still empty or less than 5 seconds old. After that, new speech is a new question, so the answer you are reading never changes under you.
 
+The answers form one conversation per session, like a ChatGPT chat: every question, Analyze Screen and answer goes with each new question, so the model remembers the problem, its own clarifying questions and the interviewer's answers. Analyze Screen (`Cmd+Enter`) adds the screenshot to that conversation and answers it with the same instructions.
+
 ### Two answer screens
 
 The overlay has a **Main** screen and a **Follow-ups** screen, with tabs in the top bar. Main answers stay on Main. When the interviewer asks a follow-up or counter-question, a short answer appears on Follow-ups and the overlay jumps there. `Cmd+Option+Left` goes back to Main, to the same answer and scroll position, and `Cmd+Option+Right` opens Follow-ups again. Remarks such as "okay" or "mm-hmm" get no answer.
@@ -67,11 +69,9 @@ For a DSA coding round, put the problem on screen and press `Cmd+Option+1`. The 
 - Analyze Screen in coding mode sends the screenshot into the same conversation, for example to check your code or a failing test.
 - **Type along.** While a step with code or a pad is on Main, a strip under the answers shows the line to type now, with the line before and after it. Say the line (the comments are the reasons), type it in the editor and press Enter, and the strip moves to the next line by itself. `Cmd+Option+Up/Down` (`Alt+Shift+Up/Down` on Windows) move it back or forward when it gets out of step, for example after you accept an autocomplete suggestion with Enter. Enter only counts while the strip is showing, and Enter in the app's own message box never counts. It uses the same macOS Accessibility permission as the Option-tap hide.
 
-Answer length, voice and content come from **AI Context → Custom Instructions**. `docs/prompts/interview-prompt.txt` is a ready-made version in the voice of a mid-level engineer talking, with short sentences, contractions and plain words. Answer length fits the question: 10 to 20 seconds to name something, about 40 seconds for a definition, about a minute for why, how and experience questions, and about a minute and a half for a story. It includes practiced answers for seven likely questions. It brings up your background only when the question is about you, builds stories only from the listed facts, and has a coding mode. Paste it in, then start a new session; custom instructions are loaded at session start.
+What the answers say comes from **AI Context → Custom Instructions**. `docs/prompts/interview-prompt.txt` is the ready-made version: it answers like an SDE-2 candidate and holds no personal background. A coding question is answered in steps: restate it, then ask clarifying questions only if their answer changes the solution (and stop there until the interviewer answers), then the brute force and why it works, then the optimized approach with a walk through the example, its cost and pseudocode. Other technical questions get the direct answer, how it works underneath, an example and the trade-off. Paste it in, then start a new session; custom instructions are loaded at session start.
 
-`docs/prompts/interview-prompt-deeper-draft.txt` is an alternative draft, not in use. It asks for more technical depth (how things work underneath, the real component names, the tradeoff). In a blind test with GPT-6 Astra it gave the stronger interview answer in 17 of 28 comparisons but sounded less natural, and its lengths and practiced answers predate the shorter targets.
-
-Word counts are generation targets, not guarantees. Read an answer before you say it: the model can still add details that are not in your background.
+Read an answer before you say it: the model can still get a detail wrong.
 
 ## Keyboard Shortcuts
 
