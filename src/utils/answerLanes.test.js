@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { parseLaneHeader, splitSideUpdate, isReplaceableAnswer, resolveLane, isBackchannel } = require('./answerLanes');
+const { parseLaneHeader, splitSideUpdate, isReplaceableAnswer, resolveLane, isBackchannel, endsWithListen } = require('./answerLanes');
 
 test('a streaming reply waits for the whole LANE line, then shows only the answer', () => {
     assert.deepEqual(parseLaneHeader('LA'), { status: 'pending' });
@@ -55,4 +55,12 @@ test('acknowledgements are recognised, questions and "go ahead" are not', () => 
     for (const text of ['Okay.', 'Mm-hmm, yeah.', 'Sounds good!', 'Got it, thanks.', 'uh huh']) assert.equal(isBackchannel(text), true, text);
     for (const text of ['Okay, so what is the time complexity?', 'Go ahead.', 'Yes, return the indices.', ''])
         assert.equal(isBackchannel(text), false, text);
+});
+
+test('an answer waits for the interviewer only when its last line is a LISTEN line', () => {
+    assert.equal(endsWithListen('**Questions**\nCan the numbers be negative?\n\nLISTEN: their answers\n'), true);
+    assert.equal(endsWithListen('Should I start coding?\n**Listen** go-ahead to code'), true);
+    // A LISTEN line in the middle, followed by more of the answer, isn't the end.
+    assert.equal(endsWithListen('LISTEN: their answers\n\nIf they say yes, the simple version is...'), false);
+    assert.equal(endsWithListen(''), false);
 });

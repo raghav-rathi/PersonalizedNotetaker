@@ -34,12 +34,13 @@ function openRouterContent(message, cacheMark) {
 }
 
 /**
- * @param {{model: AnswerModel, systemPrompt: string, messages: ChatMessage[], maxTokens: number, sessionId?: string, cacheConversation?: boolean}} request
+ * Every answer is the next message in a conversation that only grows at the end, so its start stays
+ * cached. OpenAI caches the conversation on its own; Anthropic only caches up to a marked block, so for
+ * it the newest message carries the mark too, and Anthropic finds the earlier turns' cache from there.
+ * @param {{model: AnswerModel, systemPrompt: string, messages: ChatMessage[], maxTokens: number, sessionId?: string}} request
  */
-function buildOpenRouterAnswerRequest({ model, systemPrompt, messages, maxTokens, sessionId = '', cacheConversation = false }) {
-    // OpenAI caches a growing conversation on its own; Anthropic only caches up to a marked block, so the
-    // newest message carries the mark and Anthropic finds the earlier turns' cache from there.
-    const markNewest = cacheConversation && model.provider === 'anthropic';
+function buildOpenRouterAnswerRequest({ model, systemPrompt, messages, maxTokens, sessionId = '' }) {
+    const markNewest = model.provider === 'anthropic';
     const last = messages.length - 1;
     return {
         model: model.id,
@@ -49,10 +50,6 @@ function buildOpenRouterAnswerRequest({ model, systemPrompt, messages, maxTokens
         usage: { include: true },
         provider: { order: [model.provider] },
         ...(sessionId ? { session_id: sessionId } : {}),
-        // A one-question answer caches only the system prompt: its question part changes every time, so on
-        // OpenAI it is billed as plain input instead of a 1.25x cache write. A coding round caches the whole
-        // conversation, which only ever grows at the end.
-        ...(cacheConversation ? {} : { prompt_cache_options: { mode: 'explicit' } }),
         messages: [
             { role: 'system', content: [{ type: 'text', text: systemPrompt, ...CACHE_MARK }] },
             ...messages.map((message, index) => ({ role: message.role, content: openRouterContent(message, markNewest && index === last) })),
@@ -102,25 +99,14 @@ function createSseParser(onEvent) {
 
 /**
  * @param {{apiKey: string, model: AnswerModel, systemPrompt: string, messages: ChatMessage[], maxTokens: number, sessionId?: string,
- *   cacheConversation?: boolean, signal: AbortSignal, onText: (text: string) => void, fetchImpl?: typeof fetch}} options
+ *   signal: AbortSignal, onText: (text: string) => void, fetchImpl?: typeof fetch}} options
  * @returns {Promise<AnswerResult>}
  */
-async function streamOpenRouterAnswer({
-    apiKey,
-    model,
-    systemPrompt,
-    messages,
-    maxTokens,
-    sessionId = '',
-    cacheConversation = false,
-    signal,
-    onText,
-    fetchImpl = fetch,
-}) {
+async function streamOpenRouterAnswer({ apiKey, model, systemPrompt, messages, maxTokens, sessionId = '', signal, onText, fetchImpl = fetch }) {
     const response = await fetchImpl(OPENROUTER_URL, {
         method: 'POST',
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(buildOpenRouterAnswerRequest({ model, systemPrompt, messages, maxTokens, sessionId, cacheConversation })),
+        body: JSON.stringify(buildOpenRouterAnswerRequest({ model, systemPrompt, messages, maxTokens, sessionId })),
         signal,
     });
     if (!response.ok) {

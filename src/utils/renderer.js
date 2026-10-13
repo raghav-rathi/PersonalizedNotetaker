@@ -501,7 +501,7 @@ async function flushPendingScreenshot() {
     }
 
     screenshotSendInFlight = true;
-    const { prompt, quality, resolve } = pendingScreenshotJob;
+    const { prompt, spokenRequest, quality, resolve } = pendingScreenshotJob;
     pendingScreenshotJob = null;
 
     try {
@@ -517,9 +517,12 @@ async function flushPendingScreenshot() {
         }
         lastScreenshotSentAt = Date.now();
         console.log(`Sending screenshot: ${captured.width}x${captured.height}, ~${Math.round(captured.data.length / 1024)}KB`);
+        // `prompt` is for Cloud and local mode; in "Use your API keys" mode the answer follows the custom
+        // instructions, and only the spoken request (if any) goes along.
         const result = await ipcRenderer.invoke('send-image-content', {
             data: captured.data,
             prompt,
+            spokenRequest,
             mimeType: captured.mimeType || 'image/jpeg',
         });
         if (!result.success) {
@@ -543,12 +546,12 @@ async function flushPendingScreenshot() {
     }
 }
 
-function queueScreenshot({ prompt = MANUAL_SCREENSHOT_PROMPT, quality = currentImageQuality } = {}) {
+function queueScreenshot({ prompt = MANUAL_SCREENSHOT_PROMPT, spokenRequest = '', quality = currentImageQuality } = {}) {
     return new Promise(resolve => {
         if (pendingScreenshotJob?.resolve) {
             pendingScreenshotJob.resolve({ success: false, error: 'Replaced by a newer screenshot' });
         }
-        pendingScreenshotJob = { prompt, quality, resolve };
+        pendingScreenshotJob = { prompt, spokenRequest, quality, resolve };
         flushPendingScreenshot();
     });
 }
@@ -566,6 +569,7 @@ async function captureManualScreenshot(imageQuality = null, extraContext = '') {
     const prompt = extraContext ? `${MANUAL_SCREENSHOT_PROMPT}\n\nSpoken request: ${extraContext}` : MANUAL_SCREENSHOT_PROMPT;
     return queueScreenshot({
         prompt,
+        spokenRequest: extraContext,
         quality: imageQuality || currentImageQuality,
     });
 }

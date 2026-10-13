@@ -1,6 +1,6 @@
-// Coding mode keeps one conversation per problem, so every turn sees the problem, the interviewer's
-// answers, both pads and the code written so far. In ChatGPT the chat history did that; here the
-// whole conversation is sent on each turn, oldest first, so the prompt cache keeps hitting.
+// Coding mode: the hotkey commands and the DSA skill that answers them. Each problem is its own
+// Conversation (conversation.js), so every turn sees the problem, the interviewer's answers, both pads
+// and the code written so far.
 const fs = require('fs');
 const path = require('path');
 
@@ -26,58 +26,4 @@ function loadCodingSkill() {
     return skillText;
 }
 
-/** @typedef {{role:'user'|'assistant', text:string, imageJpeg?:string|null}} ChatMessage */
-/** @typedef {{text:string, imageJpeg:string|null, reply:string}} CodingTurn */
-
-class CodingSession {
-    constructor() {
-        this.active = false;
-        this.problemId = 0;
-        /** @type {CodingTurn[]} */
-        this.turns = [];
-    }
-
-    /** Starts a new problem: earlier turns belong to the previous problem and are dropped. */
-    startProblem() {
-        this.active = true;
-        this.problemId++;
-        this.turns = [];
-        return this.problemId;
-    }
-
-    stop() {
-        this.active = false;
-    }
-
-    /** @param {{text:string, imageJpeg?:string|null}} turn */
-    addTurn({ text, imageJpeg = null }) {
-        /** @type {CodingTurn} */
-        const turn = { text, imageJpeg, reply: '' };
-        this.turns.push(turn);
-        return turn;
-    }
-
-    /** @param {CodingTurn} turn */
-    removeTurn(turn) {
-        this.turns = this.turns.filter(item => item !== turn);
-    }
-
-    /**
-     * The conversation up to and including `turn`. A reply that is still streaming is included as far
-     * as it has got, so a counter-question asked mid-answer sees what is already on screen.
-     * @param {CodingTurn} turn
-     * @returns {ChatMessage[]}
-     */
-    messagesThrough(turn) {
-        /** @type {ChatMessage[]} */
-        const messages = [];
-        for (const item of this.turns) {
-            messages.push({ role: 'user', text: item.text, imageJpeg: item.imageJpeg });
-            if (item === turn) break;
-            if (item.reply.trim()) messages.push({ role: 'assistant', text: item.reply });
-        }
-        return messages;
-    }
-}
-
-module.exports = { CODING_COMMANDS, EXIT_WORDS, NEW_PROBLEM_WORDS, loadCodingSkill, CodingSession };
+module.exports = { CODING_COMMANDS, EXIT_WORDS, NEW_PROBLEM_WORDS, loadCodingSkill };

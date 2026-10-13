@@ -89,7 +89,7 @@ test('a rejected key fails before any text is shown', async () => {
     assert.deepEqual(shown, []);
 });
 
-test('a coding conversation goes out oldest first, with each screenshot on the turn that sent it', () => {
+test('a conversation goes out oldest first, with each screenshot on the turn that sent it', () => {
     const request = buildOpenRouterAnswerRequest({
         model: astra,
         systemPrompt: 'skill',
@@ -99,7 +99,6 @@ test('a coding conversation goes out oldest first, with each screenshot on the t
             { role: 'user', text: 'command: part two' },
         ],
         maxTokens: 100,
-        cacheConversation: true,
     });
     assert.deepEqual(
         request.messages.map(message => message.role),
@@ -112,24 +111,13 @@ test('a coding conversation goes out oldest first, with each screenshot on the t
     assert.equal(request.messages[3].content, 'command: part two');
 });
 
-test('only a coding conversation is cached past the system prompt', () => {
-    const messages = [{ role: 'user', text: 'question' }];
-    const single = buildOpenRouterAnswerRequest({ model: astra, systemPrompt: 'system', messages, maxTokens: 100 });
-    const coding = buildOpenRouterAnswerRequest({ model: astra, systemPrompt: 'system', messages, maxTokens: 100, cacheConversation: true });
-    for (const request of [single, coding]) {
-        assert.deepEqual(request.messages[0].content, [{ type: 'text', text: 'system', prompt_cache_breakpoint: { mode: 'explicit' } }]);
-    }
-    assert.deepEqual(single.prompt_cache_options, { mode: 'explicit' });
-    assert.equal(coding.prompt_cache_options, undefined);
-});
-
-test('Opus goes to Anthropic first at medium effort, and marks the newest coding turn so the conversation is cached', () => {
+test('Opus goes to Anthropic first at medium effort, and marks the newest turn so the conversation is cached', () => {
     const messages = [
         { role: 'user', text: 'NEW PROBLEM', imageJpeg: 'AAAA' },
         { role: 'assistant', text: 'LANE: MAIN\nPart 1' },
         { role: 'user', text: 'command: part two' },
     ];
-    const request = buildOpenRouterAnswerRequest({ model: opus, systemPrompt: 'skill', messages, maxTokens: 100, cacheConversation: true });
+    const request = buildOpenRouterAnswerRequest({ model: opus, systemPrompt: 'skill', messages, maxTokens: 100 });
     assert.equal(request.model, 'anthropic/claude-opus-5.5');
     assert.deepEqual(request.provider, { order: ['anthropic'] });
     assert.deepEqual(request.reasoning, { effort: 'medium', exclude: true });
