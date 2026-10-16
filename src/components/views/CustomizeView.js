@@ -182,6 +182,8 @@ export class CustomizeView extends LitElement {
         layoutMode: { type: String },
         keybinds: { type: Object },
         googleSearchEnabled: { type: Boolean },
+        autoScreenContext: { type: Boolean },
+        screenContextSensitivity: { type: String },
         backgroundTransparency: { type: Number },
         fontSize: { type: Number },
         theme: { type: String },
@@ -207,6 +209,8 @@ export class CustomizeView extends LitElement {
         this.onImageQualityChange = () => {};
         this.onLayoutModeChange = () => {};
         this.googleSearchEnabled = false;
+        this.autoScreenContext = true;
+        this.screenContextSensitivity = 'balanced';
         this.isClearing = false;
         this.isRestoring = false;
         this.clearStatusMessage = '';
@@ -228,6 +232,8 @@ export class CustomizeView extends LitElement {
         try {
             const [prefs, keybinds] = await Promise.all([cheatingDaddy.storage.getPreferences(), cheatingDaddy.storage.getKeybinds()]);
             this.googleSearchEnabled = prefs.googleSearchEnabled ?? false;
+            this.autoScreenContext = prefs.autoScreenContext ?? true;
+            this.screenContextSensitivity = prefs.screenContextSensitivity || 'balanced';
             this.backgroundTransparency = prefs.backgroundTransparency ?? 0.8;
             this.fontSize = prefs.fontSize ?? 20;
             this.audioMode = prefs.audioMode ?? 'speaker_only';
@@ -255,7 +261,7 @@ export class CustomizeView extends LitElement {
             { value: 'interview', name: 'Job Interview' },
             { value: 'lld', name: 'LLD Interview (SDE-2)' },
             { value: 'sales', name: 'Sales Call' },
-            { value: 'meeting', name: 'Business Meeting' },
+            { value: 'meeting', name: 'Tech Meeting' },
             { value: 'presentation', name: 'Presentation' },
             { value: 'negotiation', name: 'Negotiation' },
             { value: 'exam', name: 'Exam Assistant' },
@@ -404,6 +410,12 @@ export class CustomizeView extends LitElement {
         this.requestUpdate();
     }
 
+    // Read on every question, so a change applies from the next one.
+    async handleScreenContextChange(key, value) {
+        this[key] = value;
+        await cheatingDaddy.storage.updatePreference(key, value);
+    }
+
     async handleGoogleSearchChange(e) {
         this.googleSearchEnabled = e.target.checked;
         await cheatingDaddy.storage.updatePreference('googleSearchEnabled', this.googleSearchEnabled);
@@ -532,6 +544,8 @@ export class CustomizeView extends LitElement {
                 fontSize: 20,
                 backgroundTransparency: 0.8,
                 googleSearchEnabled: false,
+                autoScreenContext: true,
+                screenContextSensitivity: 'balanced',
                 theme: 'dark',
             };
             for (const [key, value] of Object.entries(defaults)) {
@@ -554,6 +568,8 @@ export class CustomizeView extends LitElement {
             this.fontSize = defaults.fontSize;
             this.backgroundTransparency = defaults.backgroundTransparency;
             this.googleSearchEnabled = defaults.googleSearchEnabled;
+            this.autoScreenContext = defaults.autoScreenContext;
+            this.screenContextSensitivity = defaults.screenContextSensitivity;
             this.customPrompt = defaults.customPrompt;
             this.theme = defaults.theme;
 
@@ -644,6 +660,46 @@ export class CustomizeView extends LitElement {
                             <option value="medium">Medium Quality</option>
                             <option value="low">Low Quality</option>
                         </select>
+                    </div>
+                </div>
+            </section>
+        `;
+    }
+
+    renderScreenContextSection() {
+        const levels = [
+            ['more', 'More often'],
+            ['balanced', 'Balanced'],
+            ['fewer', 'Less often'],
+        ];
+        return html`
+            <section class="surface">
+                <div class="surface-title">Screen Context</div>
+                <div class="form-grid">
+                    <label class="toggle-row">
+                        <input
+                            class="toggle-input"
+                            type="checkbox"
+                            .checked=${this.autoScreenContext}
+                            @change=${e => this.handleScreenContextChange('autoScreenContext', e.target.checked)}
+                        />
+                        <span class="toggle-label">Attach my screen when a question needs it</span>
+                    </label>
+                    <div class="form-group">
+                        <label class="form-label">Sensitivity</label>
+                        <select
+                            class="control"
+                            ?disabled=${!this.autoScreenContext}
+                            @change=${e => this.handleScreenContextChange('screenContextSensitivity', e.target.value)}
+                        >
+                            ${levels.map(
+                                ([value, label]) =>
+                                    html`<option value=${value} ?selected=${value === this.screenContextSensitivity}>${label}</option>`
+                            )}
+                        </select>
+                    </div>
+                    <div class="form-help">
+                        Jev decides from the words of each question. Your screen is sent only with answers marked 📷. Needs the OpenRouter key.
                     </div>
                 </div>
             </section>
@@ -765,8 +821,8 @@ export class CustomizeView extends LitElement {
             <div class="unified-page">
                 <div class="unified-wrap">
                     <div class="page-title">Settings</div>
-                    ${this.renderAudioSection()} ${this.renderLanguageSection()} ${this.renderAppearanceSection()} ${this.renderKeyboardSection()}
-                    ${this.renderPrivacySection()}
+                    ${this.renderAudioSection()} ${this.renderScreenContextSection()} ${this.renderLanguageSection()}
+                    ${this.renderAppearanceSection()} ${this.renderKeyboardSection()} ${this.renderPrivacySection()}
                 </div>
             </div>
         `;

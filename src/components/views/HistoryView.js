@@ -366,7 +366,7 @@ export class HistoryView extends LitElement {
             lld: 'LLD Interview (SDE-2)',
             hld: 'HLD / System Design',
             sales: 'Sales Call',
-            meeting: 'Business Meeting',
+            meeting: 'Tech Meeting',
             presentation: 'Presentation',
             negotiation: 'Negotiation',
             exam: 'Exam Assistant',

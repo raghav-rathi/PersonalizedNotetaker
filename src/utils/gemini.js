@@ -2,7 +2,7 @@ const { GoogleGenAI, ThinkingLevel } = require('@google/genai');
 const { BrowserWindow, ipcMain, shell } = require('electron');
 const { spawn } = require('child_process');
 const { saveDebugAudio } = require('../audioUtils');
-const { getSystemPrompt, CODING_ANSWER_INSTRUCTION } = require('./prompts');
+const { getSystemPrompt, buildMeetingContextBlock, CODING_ANSWER_INSTRUCTION } = require('./prompts');
 const {
     getApiKey,
     getGroqApiKey,
@@ -17,6 +17,7 @@ const {
 } = require('../storage');
 const { connectCloud, sendCloudAudio, sendCloudText, sendCloudImage, closeCloud, isCloudActive, setOnTurnComplete } = require('./cloud');
 const { captureScreenStill } = require('./screenStill');
+const { SENSITIVITY, announcesShare, decideScreen } = require('./screenDecision');
 const {
     chooseAnalyzeScreenPath,
     sendForcedLiveScreenTurn,
@@ -510,6 +511,12 @@ let answerModel = answerModelById();
 /** @type {{at:number, text:string}[]} */
 let heardLog = [];
 let lastCodingCommand = { name: '', at: 0 };
+// Set when Jev hears that something is about to be shared ("I'm sharing a doc, open it"); the next question
+// in this window gets a screenshot taken when it ends.
+const SCREEN_SHARE_WINDOW_MS = 2 * 60 * 1000;
+let screenShareAt = 0;
+// Counts questions, so a screen decision that arrives after a newer question changes nothing.
+let screenAskSeq = 0;
 // Counts "new problem" requests, so a screenshot that finishes after a newer request or an exit is dropped.
 let codingProblemStart = 0;
 const codingSession = new CodingSession();
@@ -574,6 +581,7 @@ function cancelTextAnswers() {
     answerTimer = null;
     lastVoiceQuestion = null;
     liveAnswerFallbackPending = false;
+    screenShareAt = 0;
     codingProblemStart++;
     if (codingSession.active) {
         codingSession.stop();
@@ -609,6 +617,20 @@ function scheduleAnswerForVoiceTurn() {
 // model picks the screen again from the whole question: "Can you walk me through" alone looks like a
 // follow-up, but the full question may be a new topic, and then the card moves to the main screen.
 function answerSpokenQuestion(question, turnId) {
+    cancelTurn(turnId);
+    return askWithScreenContext({
+        question,
+        turnId,
+        typed: false,
+        send: imageJpeg =>
+            codingSession.active
+                ? sendCodingTurn({ text: `they said: ${question}`, label: question, turnId, imageJpeg })
+                : sendNormalAnswer(question, { turnId, imageJpeg }),
+    });
+}
+
+/** Stops a turn's answer and drops its coding turn, so the turn can be answered again. */
+function cancelTurn(turnId) {
     for (const request of [...answerRequests]) {
         if (request.turnId !== turnId) continue;
         cancelRequest(request);
@@ -616,8 +638,55 @@ function answerSpokenQuestion(question, turnId) {
     }
     const earlier = answerCards.get(turnId)?.codingTurn;
     if (earlier) codingSession.removeTurn(earlier);
-    if (codingSession.active) return sendCodingTurn({ text: `they said: ${question}`, label: question, turnId });
-    return sendNormalAnswer(question, { turnId });
+}
+
+/**
+ * Answers at once, without the screen, while Jev decides in about half a second whether the question
+ * needs it. If it does, the same card is answered again with a screenshot taken when the question ended;
+ * the text usually hasn't appeared yet, so this costs about half a second. A keyword such as "look at
+ * this", or something announced as being shared, attaches the screenshot straight away.
+ * @param {{question:string, turnId:string, typed:boolean, send:(imageJpeg:string|null) => unknown}} options
+ */
+function askWithScreenContext({ question, turnId, typed, send }) {
+    const prefs = getPreferences();
+    const apiKey = getOpenRouterApiKey();
+    if (prefs.autoScreenContext === false || !apiKey) {
+        console.log('[screen] off');
+        return send(lastScreenshotJpeg && needsVisualContext(question) ? lastScreenshotJpeg : null);
+    }
+    const seq = ++screenAskSeq;
+    const shot = captureScreenStill({ quality: prefs.selectedImageQuality || 'medium' }).then(result => {
+        if (!result.success) {
+            console.warn(`[screen] capture failed: ${result.error}`);
+            return null;
+        }
+        rememberScreenshot(result.data);
+        return result.data;
+    });
+    // A meeting shares screens all the time and says "can you see my screen?", so there Jev alone decides.
+    const meeting = currentProfile === 'meeting';
+    const sharing = !meeting && Date.now() - screenShareAt <= SCREEN_SHARE_WINDOW_MS;
+    if (sharing || (!meeting && needsVisualContext(question))) {
+        console.log(`[screen] ${sharing ? 'pending share' : 'keyword'}`);
+        screenShareAt = 0;
+        return shot.then(send);
+    }
+    send(null);
+    const threshold = SENSITIVITY[prefs.screenContextSensitivity] ?? SENSITIVITY.balanced;
+    decideScreen({ apiKey, recent: recentHeardText().slice(-600), latest: question, typed, threshold, profile: currentProfile }).then(decision => {
+        if (!decision) return console.log('[screen] jev unavailable');
+        console.log(`[screen] jev ${decision.action} ${(decision.probabilities.now ?? 0).toFixed(2)} in ${decision.ms} ms`);
+        if (announcesShare(decision)) screenShareAt = Date.now();
+        if (decision.action !== 'now' || seq !== screenAskSeq) return;
+        const card = answerCards.get(turnId);
+        if (card && !isReplaceableAnswer({ text: card.text, firstTextAt: card.firstTextAt, now: Date.now() })) return;
+        shot.then(imageJpeg => {
+            if (!imageJpeg || seq !== screenAskSeq) return;
+            // ponytail: a coding reply that already finished as LANE: NONE keeps its turn in the log; rare, harmless.
+            cancelTurn(turnId);
+            send(imageJpeg);
+        });
+    });
 }
 
 async function streamGeminiAnswer({ apiKey, systemPrompt, messages, signal, onText }) {
@@ -793,22 +862,25 @@ async function streamLanedAnswer({
     const model = openRouterKey && !result.usedFallback ? answerModel.id : GEMINI_ANSWER_MODEL;
     const cost = result.cost ? `, $${result.cost.toFixed(4)}` : '';
     console.log(
-        `[answer] ${model} ${codingTurn ? 'coding' : 'interview'} ${lane}: first text ${firstTextAt - startedAt} ms, done ${Date.now() - startedAt} ms${cost}`
+        `[answer] ${model} ${codingTurn ? 'coding' : currentProfile || 'interview'} ${lane}: first text ${firstTextAt - startedAt} ms, done ${Date.now() - startedAt} ms${cost}`
     );
     if (!answerRequests.size) sendToRenderer('update-status', codingSession.active ? 'Coding mode' : 'Listening...');
 }
 
-/** @param {string} question @param {{turnId?:string}} [options] */
-function sendNormalAnswer(question, { turnId = createTurnId('answer') } = {}) {
+/** @param {string} question @param {{turnId?:string, imageJpeg?:string|null}} [options] */
+function sendNormalAnswer(question, { turnId = createTurnId('answer'), imageJpeg = null } = {}) {
     const records = [...conversationHistory, ...screenAnalysisHistory].sort((a, b) => a.timestamp - b.timestamp);
     const context = buildRelevantContext({ query: question, summary: currentSummary, records }).slice(-ANSWER_CONTEXT_CHARS);
-    const imageJpeg = lastScreenshotJpeg && needsVisualContext(question) ? lastScreenshotJpeg : null;
     const userText = `${context ? `Conversation so far:\n${context}\n\n` : ''}Main question on screen: ${mainQuestion || 'none yet'}\n\nQuestion:\n${question}`;
     return streamLanedAnswer({
         question,
-        label: question,
+        // 📷 marks every answer that was sent a screenshot of the user's screen.
+        label: imageJpeg ? `📷 ${question}` : question,
         turnId,
-        systemPrompt: `${currentSystemPrompt || 'You are a helpful assistant.'}\n\n${LANE_INSTRUCTION}\n\n${CODING_ANSWER_INSTRUCTION}`,
+        systemPrompt:
+            currentProfile === 'meeting'
+                ? `${getSystemPrompt('meeting', buildMeetingContextBlock(getPreferences()), false)}\n\n${LANE_INSTRUCTION}`
+                : `${currentSystemPrompt || 'You are a helpful assistant.'}\n\n${LANE_INSTRUCTION}\n\n${CODING_ANSWER_INSTRUCTION}`,
         messages: [{ role: 'user', text: userText, imageJpeg }],
     });
 }
@@ -818,7 +890,7 @@ function sendCodingTurn({ text, label, imageJpeg = null, turnId = createTurnId('
     const codingTurn = codingSession.addTurn({ text, imageJpeg });
     return streamLanedAnswer({
         question: label,
-        label,
+        label: imageJpeg ? `📷 ${label}` : label,
         turnId,
         lane,
         systemPrompt: loadCodingSkill(currentProfile),
@@ -1555,7 +1627,8 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
     const enabledTools = await getEnabledTools();
     const googleSearchEnabled = enabledTools.some(tool => tool.googleSearch);
 
-    const systemPrompt = getSystemPrompt(profile, customPrompt, googleSearchEnabled);
+    // Live only transcribes and re-bills its prompt every turn, so the meeting context goes to the answer model only.
+    const systemPrompt = getSystemPrompt(profile, profile === 'meeting' ? '' : customPrompt, googleSearchEnabled);
     currentSystemPrompt = systemPrompt; // Store for Groq
 
     // Initialize new conversation session only on first connect
@@ -2403,12 +2476,20 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
         lastVoiceQuestion = null;
         const newProblem = userText.match(NEW_PROBLEM_WORDS);
         if (newProblem) return handleCodingCommand('new', { problemText: userText.slice(newProblem[0].length).trim() });
-        if (codingSession.active) {
-            if (EXIT_WORDS.test(userText)) exitCodingMode();
-            else sendCodingTurn({ text: `command: ${userText}`, label: userText });
+        if (codingSession.active && EXIT_WORDS.test(userText)) {
+            exitCodingMode();
             return { success: true };
         }
-        sendNormalAnswer(userText);
+        const turnId = createTurnId(codingSession.active ? 'code' : 'answer');
+        askWithScreenContext({
+            question: userText,
+            turnId,
+            typed: true,
+            send: imageJpeg =>
+                codingSession.active
+                    ? sendCodingTurn({ text: `command: ${userText}`, label: userText, turnId, imageJpeg })
+                    : sendNormalAnswer(userText, { turnId, imageJpeg }),
+        });
         return { success: true };
     });
 

@@ -463,7 +463,7 @@ export class AssistantView extends LitElement {
             lld: 'LLD Interview (SDE-2)',
             hld: 'HLD / System Design',
             sales: 'Sales Call',
-            meeting: 'Business Meeting',
+            meeting: 'Tech Meeting',
             presentation: 'Presentation',
             negotiation: 'Negotiation',
             exam: 'Exam Assistant',
@@ -681,6 +681,9 @@ export class AssistantView extends LitElement {
     // Typing into the overlay opens the message box with that first key already in it.
     _openInputOnType = async e => {
         if (this._inputOpen || e.isComposing) return;
+        // Typing into another field, such as the meeting Context panel, stays there.
+        const target = e.composedPath()[0];
+        if (target?.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target?.tagName)) return;
         const paste = (e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === 'v';
         const printable = e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey;
         if (!paste && !printable) return;

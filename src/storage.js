@@ -33,6 +33,12 @@ const DEFAULT_PREFERENCES = {
     ollamaHost: 'http://127.0.0.1:11434',
     ollamaModel: 'llama3.1',
     whisperModel: 'Xenova/whisper-small',
+    // Jev decides per question whether to attach a fresh screenshot (screenDecision.js).
+    autoScreenContext: true,
+    screenContextSensitivity: 'balanced',
+    // The Tech Meeting profile answers from this name and context, edited in the app (AI Customization or the overlay).
+    meetingName: 'Bharat',
+    meetingContext: '',
 };
 
 const DEFAULT_KEYBINDS = null; // null means use system defaults

@@ -33,6 +33,35 @@ Join the call first, then press **Start Session** (or `Cmd+Enter` on the start s
 
 The app asks the system to keep the overlay out of screen sharing and screenshots. Check that on a test call with your meeting app before you rely on it.
 
+## Tech meetings
+
+Pick **Tech Meeting** in AI Customization. Two fields replace Custom Instructions there:
+
+- **Your name in meetings** (Bharat). Questions put to that name get answers. Close spellings from the transcription count too.
+- **Meeting context.** Paste what the meeting is about: tickets, changes, test results, log markers, Splunk queries. Answers use only these facts, keep the limits you wrote ("not seen in UAT", "needs PROD validation"), and say "I'd need to confirm that" when something isn't there.
+
+During the meeting, the overlay has a **Context** tab next to Main and Follow-ups. Edit the context there; it saves as you type, and the next answer uses it.
+
+What it answers:
+
+- questions to you
+- questions about your tickets or work
+- moments when the team is stuck on a technical problem
+
+Status updates, people talking to each other and "can you see my screen?" get no reply. Each answer starts with a sentence you can say as is. Queries and commands show in the code column.
+
+In meetings, your screen is attached only when the answer has to point at something on it ("why is compacted false on this line?"). A shared screen alone isn't enough. Claude Haiku 5.5 suits meetings: in testing it answered in 1–2 s, and each ignored line cost almost nothing.
+
+## Screen context
+
+For every question, spoken or typed, in every profile, the app checks whether the answer needs what's on your screen right now. A small decision model, Jev, reads the words of the question (never the screen) and decides in about half a second, for a tiny fraction of a cent.
+
+- **Needs the screen** ("why a hashmap on line seven?", "see the error in the terminal?"): the app takes a screenshot at that moment and answers with it. The answer shows up about half a second later than usual.
+- **Something is being shared** ("I'm sharing a doc, open it"): nothing is shown. The next question in the following 2 minutes gets a screenshot taken when that question ends, so it sees the opened doc.
+- **Doesn't need it:** answered as usual. Nothing is sent.
+
+Answers that were sent your screen are marked **📷**. Turn it off, or change how often it attaches the screen, in **Settings → Screen Context**. It needs the OpenRouter key. Without the key, or with it switched off, only questions with words like "look at this" use the screen.
+
 ## Normal questions
 
 You don't need to press anything. When the interviewer finishes a question, the answer starts appearing on **Main** within a few seconds.

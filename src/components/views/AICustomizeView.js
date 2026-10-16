@@ -39,6 +39,8 @@ export class AICustomizeView extends LitElement {
         selectedProfile: { type: String },
         onProfileChange: { type: Function },
         _context: { state: true },
+        _meetingName: { state: true },
+        _meetingContext: { state: true },
         _promptStatus: { state: true },
     };
 
@@ -47,6 +49,8 @@ export class AICustomizeView extends LitElement {
         this.selectedProfile = 'interview';
         this.onProfileChange = () => {};
         this._context = '';
+        this._meetingName = 'Bharat';
+        this._meetingContext = '';
         this._promptStatus = '';
         this._loadFromStorage();
     }
@@ -55,6 +59,8 @@ export class AICustomizeView extends LitElement {
         try {
             const prefs = await cheatingDaddy.storage.getPreferences();
             this._context = prefs.customPrompt || '';
+            this._meetingName = prefs.meetingName ?? 'Bharat';
+            this._meetingContext = prefs.meetingContext || '';
             this.requestUpdate();
         } catch (error) {
             console.error('Error loading AI customize storage:', error);
@@ -70,6 +76,12 @@ export class AICustomizeView extends LitElement {
         await cheatingDaddy.storage.updatePreference('customPrompt', val);
     }
 
+    // The meeting profile keeps its own name and context, so the interview instructions stay untouched.
+    async _saveMeeting(key, val) {
+        this[key === 'meetingName' ? '_meetingName' : '_meetingContext'] = val;
+        await cheatingDaddy.storage.updatePreference(key, val);
+    }
+
     async _openRoundPrompt() {
         const result = await window.require('electron').ipcRenderer.invoke('open-round-prompt', this.selectedProfile);
         this._promptStatus = result.success ? `Opened ${result.path}` : `Could not open the prompt: ${result.error}`;
@@ -82,7 +94,7 @@ export class AICustomizeView extends LitElement {
             { value: 'lld', label: 'LLD Interview (SDE-2)' },
             { value: 'hld', label: 'HLD / System Design' },
             { value: 'sales', label: 'Sales Call' },
-            { value: 'meeting', label: 'Business Meeting' },
+            { value: 'meeting', label: 'Tech Meeting' },
             { value: 'presentation', label: 'Presentation' },
             { value: 'negotiation', label: 'Negotiation' },
             { value: 'exam', label: 'Exam Assistant' },
@@ -114,28 +126,59 @@ export class AICustomizeView extends LitElement {
                                           </div>`
                                     : ''
                             }
-                            <div class="form-group vertical">
-                                <label class="form-label">Custom Instructions</label>
-                                <textarea
-                                    class="control"
-                                    placeholder=${
-                                        this.selectedProfile === 'lld'
-                                            ? 'Optional: Java or Python, Amazon/Flipkart, any use cases they already sent...'
-                                            : 'Resume details, role requirements, constraints...'
-                                    }
-                                    .value=${this._context}
-                                    @input=${e => this._saveContext(e.target.value)}
-                                ></textarea>
-                                <div class="form-help">
-                                    ${
-                                        this.selectedProfile === 'lld'
-                                            ? 'LLD coach is already in the profile. Put only language, company, or a pasted spec here.'
-                                            : 'Sent as context at session start. Keep it short.'
-                                    }
-                                </div>
-                            </div>
+                            ${
+                                this.selectedProfile === 'meeting'
+                                    ? html`<div class="form-group">
+                                              <label class="form-label">Your name in meetings</label>
+                                              <input
+                                                  class="control"
+                                                  type="text"
+                                                  .value=${this._meetingName}
+                                                  @input=${e => this._saveMeeting('meetingName', e.target.value)}
+                                              />
+                                          </div>
+                                          <div class="form-group vertical">
+                                              <label class="form-label">Meeting context</label>
+                                              <textarea
+                                                  class="control"
+                                                  placeholder="What the meeting is about: tickets, changes, test results, log markers, queries..."
+                                                  .value=${this._meetingContext}
+                                                  @input=${e => this._saveMeeting('meetingContext', e.target.value)}
+                                              ></textarea>
+                                              <div class="form-help">
+                                                  Answers use only these facts. You can also edit it during the meeting from the Context tab; changes
+                                                  apply from the next answer.
+                                              </div>
+                                          </div>`
+                                    : this._renderCustomInstructions()
+                            }
                         </div>
                     </section>
+                </div>
+            </div>
+        `;
+    }
+
+    _renderCustomInstructions() {
+        return html`
+            <div class="form-group vertical">
+                <label class="form-label">Custom Instructions</label>
+                <textarea
+                    class="control"
+                    placeholder=${
+                        this.selectedProfile === 'lld'
+                            ? 'Optional: Java or Python, Amazon/Flipkart, any use cases they already sent...'
+                            : 'Resume details, role requirements, constraints...'
+                    }
+                    .value=${this._context}
+                    @input=${e => this._saveContext(e.target.value)}
+                ></textarea>
+                <div class="form-help">
+                    ${
+                        this.selectedProfile === 'lld'
+                            ? 'LLD coach is already in the profile. Put only language, company, or a pasted spec here.'
+                            : 'Sent as context at session start. Keep it short.'
+                    }
                 </div>
             </div>
         `;

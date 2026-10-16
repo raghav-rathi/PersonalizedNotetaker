@@ -429,6 +429,47 @@ export class CheatingDaddyApp extends LitElement {
             overflow: hidden;
             display: flex;
             flex-direction: column;
+            position: relative;
+        }
+
+        /* The overlay is see-through, so the answers are hidden (still mounted) while the Context panel is open */
+        .content-inner.context-open > assistant-view {
+            visibility: hidden;
+        }
+
+        /* The meeting context, editable during the meeting; the answers stay mounted underneath */
+        .context-panel {
+            position: absolute;
+            inset: 0;
+            z-index: 5;
+            display: flex;
+            flex-direction: column;
+            gap: var(--space-xs);
+            padding: var(--space-sm) var(--space-md);
+            background: var(--bg-app);
+        }
+
+        .context-panel textarea {
+            flex: 1;
+            resize: none;
+            background: var(--bg-elevated);
+            color: var(--text-primary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            padding: var(--space-sm);
+            font-family: var(--font-mono);
+            font-size: var(--font-size-xs);
+            line-height: 1.5;
+            outline: none;
+        }
+
+        .context-panel textarea:focus {
+            border-color: var(--accent);
+        }
+
+        .context-help {
+            font-size: var(--font-size-xs);
+            color: var(--text-muted);
         }
 
         /* Onboarding fills everything */
@@ -471,6 +512,8 @@ export class CheatingDaddyApp extends LitElement {
         codingMode: { state: true },
         _unseen: { state: true },
         selectedScreenshotInterval: { type: String },
+        _contextOpen: { state: true },
+        _meetingContext: { state: true },
         selectedImageQuality: { type: String },
         layoutMode: { type: String },
         _viewInstances: { type: Object, state: true },
@@ -754,6 +797,18 @@ export class CheatingDaddyApp extends LitElement {
         this._revealCard(turnId);
     }
 
+    async _toggleMeetingContext() {
+        if (!this._contextOpen) this._meetingContext = (await cheatingDaddy.storage.getPreferences()).meetingContext || '';
+        this._contextOpen = !this._contextOpen;
+    }
+
+    // Saved shortly after typing stops; main reads it on every answer.
+    _saveMeetingContext(value) {
+        this._meetingContext = value;
+        clearTimeout(this._meetingContextTimer);
+        this._meetingContextTimer = setTimeout(() => cheatingDaddy.storage.updatePreference('meetingContext', value), 400);
+    }
+
     switchScreen(screen) {
         if ((screen !== 'main' && screen !== 'side') || screen === this.activeScreen) return;
         this.activeScreen = screen;
@@ -915,6 +970,7 @@ export class CheatingDaddyApp extends LitElement {
         this._unseen = { main: 0, side: 0 };
         this._trimmed = { main: 0, side: 0 };
         this.activeScreen = 'main';
+        this._contextOpen = false;
         this.codingMode = false;
         this.startTime = Date.now();
         this.sessionActive = true;
@@ -1231,7 +1287,7 @@ export class CheatingDaddyApp extends LitElement {
             lld: 'LLD Interview',
             hld: 'HLD Interview',
             sales: 'Sales Call',
-            meeting: 'Meeting',
+            meeting: 'Tech Meeting',
             presentation: 'Presentation',
             negotiation: 'Negotiation',
             exam: 'Exam',
@@ -1260,11 +1316,24 @@ export class CheatingDaddyApp extends LitElement {
                             ['side', 'Follow-ups'],
                         ].map(
                             ([screen, name]) => html`
-                                <button class="screen-tab ${screen === this.activeScreen ? 'active' : ''}" @click=${() => this.switchScreen(screen)}>
+                                <button
+                                    class="screen-tab ${screen === this.activeScreen && !this._contextOpen ? 'active' : ''}"
+                                    @click=${() => {
+                                        this._contextOpen = false;
+                                        this.switchScreen(screen);
+                                    }}
+                                >
                                     ${name}${this._unseen[screen] ? html`<span class="screen-new">${this._unseen[screen]} new</span>` : ''}
                                 </button>
                             `
                         )}
+                        ${
+                            this.selectedProfile === 'meeting'
+                                ? html`<button class="screen-tab ${this._contextOpen ? 'active' : ''}" @click=${() => this._toggleMeetingContext()}>
+                                      Context
+                                  </button>`
+                                : ''
+                        }
                     </span>
                 </div>
                 <div class="live-bar-right">
@@ -1298,7 +1367,21 @@ export class CheatingDaddyApp extends LitElement {
                 ${this.renderSidebar()}
                 <div class="content">
                     ${isLive ? this.renderLiveBar() : ''}
-                    <div class="content-inner ${isLive ? 'live' : ''}">${this.renderCurrentView()}</div>
+                    <div class="content-inner ${isLive ? 'live' : ''} ${isLive && this._contextOpen ? 'context-open' : ''}">
+                        ${this.renderCurrentView()}
+                        ${
+                            isLive && this._contextOpen
+                                ? html`<div class="context-panel">
+                                      <textarea
+                                          .value=${this._meetingContext}
+                                          placeholder="What the meeting is about: tickets, changes, test results, log markers..."
+                                          @input=${e => this._saveMeetingContext(e.target.value)}
+                                      ></textarea>
+                                      <div class="context-help">Saved as you type. The next answer uses it.</div>
+                                  </div>`
+                                : ''
+                        }
+                    </div>
                 </div>
                 ${
                     isLive
