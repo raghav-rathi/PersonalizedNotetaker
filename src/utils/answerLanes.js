@@ -9,7 +9,6 @@ const HEADER_MAX_CHARS = 40;
 // While an answer is this young, the interviewer finishing their sentence may still replace it.
 const REPLACE_GRACE_MS = 5000;
 const UPDATE_MARKER = /^\s*[*_]*UPDATE[*_]*\s*:\s*[*_]*\s*$/i;
-const TEACH_MARKER = /^\s*[*_]*TEACH[*_]*\s*:\s*[*_]*\s*$/i;
 // Acknowledgements such as "okay" or "mm-hmm" on their own. "Go ahead" is left out on purpose: in a
 // coding round it means "start coding".
 const BACKCHANNEL =
@@ -22,7 +21,7 @@ LANE: MAIN for a new question or a new topic.
 LANE: SIDE for a follow-up, counter-question, challenge or interruption about the main question on screen (given below as "Main question on screen"), and for a quick social question that needs a reply, like "can you hear me?".
 LANE: NONE when nothing needs an answer: "okay", "mm-hmm", "sounds good", "go on", "take your time", the interviewer thinking out loud, or a question cut off mid-sentence. Write nothing after that line.
 If the main question on screen is "none yet", use MAIN.
-For SIDE, answer only the new point, at the length the rules give follow-ups. Don't repeat the main answer.`;
+For SIDE, the first sentence is the direct answer, one I can say as is. Then answer only the new point, at the length the rules give follow-ups. Don't repeat the main answer.`;
 
 /**
  * Reads the LANE line from a reply that is still streaming.
@@ -68,31 +67,6 @@ function splitSideUpdate(body) {
 }
 
 /**
- * Splits the script the user says from the beginner lesson that follows a "TEACH:" line.
- * The marker only counts outside code fences, same as UPDATE.
- * @param {string} body
- * @returns {{answer:string, lesson:string|null}}
- */
-function splitMainLesson(body) {
-    const lines = String(body || '').split('\n');
-    let inFence = false;
-    for (let index = 0; index < lines.length; index++) {
-        if (/^\s*```/.test(lines[index])) inFence = !inFence;
-        else if (!inFence && TEACH_MARKER.test(lines[index])) {
-            return {
-                answer: lines.slice(0, index).join('\n').trimEnd(),
-                lesson: lines
-                    .slice(index + 1)
-                    .join('\n')
-                    .replace(/^\s*\n/, '')
-                    .trimEnd(),
-            };
-        }
-    }
-    return { answer: String(body || ''), lesson: null };
-}
-
-/**
  * A new fragment of speech may rewrite an answer only before the user has started reading it.
  * @param {{text?:string, firstTextAt?:number, now:number, graceMs?:number}} answer
  */
@@ -119,4 +93,4 @@ function resolveLane(requested, { hasMainAnswer }) {
     return 'main';
 }
 
-module.exports = { LANE_INSTRUCTION, parseLaneHeader, splitSideUpdate, splitMainLesson, isReplaceableAnswer, resolveLane, isBackchannel };
+module.exports = { LANE_INSTRUCTION, parseLaneHeader, splitSideUpdate, isReplaceableAnswer, resolveLane, isBackchannel };

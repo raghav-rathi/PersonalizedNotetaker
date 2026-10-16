@@ -1,5 +1,7 @@
 const { FusesPlugin } = require('@electron-forge/plugin-fuses');
 const { FuseV1Options, FuseVersion } = require('@electron/fuses');
+const { execFileSync } = require('node:child_process');
+const path = require('node:path');
 
 module.exports = {
     packagerConfig: {
@@ -10,15 +12,8 @@ module.exports = {
         name: 'Personalized Notetaker',
         appBundleId: 'com.personalized.notetaker',
         icon: 'src/assets/notetaker',
-        // Ad-hoc signature, reused for this copy so macOS permission grants stick.
-        // Hardened runtime stays off: it needs an Apple Developer ID or the app will not launch.
-        osxSign: {
-            identity: '-',
-            optionsForFile: () => ({
-                entitlements: 'entitlements.plist',
-                hardenedRuntime: false,
-            }),
-        },
+        // Signed ad-hoc in the postPackage hook below. osxSign with identity '-' looks for a
+        // keychain identity named "-", fails, and silently leaves Electron's own signature.
         // notarize if off cuz i ran this for 6 hours and it still didnt finish
         // osxNotarize: {
         //    appleId: 'your apple id',
@@ -27,6 +22,18 @@ module.exports = {
         // },
     },
     rebuildConfig: {},
+    hooks: {
+        // Ad-hoc signature under com.personalized.notetaker, so macOS permissions belong to this app.
+        // Hardened runtime stays off: it needs an Apple Developer ID or the app will not launch.
+        // Every rebuild changes the signature, so run `tccutil reset All com.personalized.notetaker` and grant again.
+        postPackage: async (forgeConfig, { platform, outputPaths }) => {
+            if (platform !== 'darwin') return;
+            for (const dir of outputPaths) {
+                const appPath = path.join(dir, `${forgeConfig.packagerConfig.name}.app`);
+                execFileSync('codesign', ['--force', '--deep', '--sign', '-', '--entitlements', 'entitlements.plist', appPath], { stdio: 'inherit' });
+            }
+        },
+    },
     makers: [
         {
             name: '@electron-forge/maker-squirrel',

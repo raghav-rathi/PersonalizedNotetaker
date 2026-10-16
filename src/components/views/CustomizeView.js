@@ -320,8 +320,6 @@ export class CustomizeView extends LitElement {
             codingFullCode: isMac ? 'Cmd+Alt+5' : 'Alt+Shift+5',
             codingDryRun: isMac ? 'Cmd+Alt+6' : 'Alt+Shift+6',
             codingExit: isMac ? 'Cmd+Alt+9' : 'Alt+Shift+9',
-            typeAlongBack: isMac ? 'Cmd+Alt+Up' : 'Alt+Shift+Up',
-            typeAlongNext: isMac ? 'Cmd+Alt+Down' : 'Alt+Shift+Down',
         };
     }
 
@@ -351,8 +349,6 @@ export class CustomizeView extends LitElement {
             { key: 'codingFullCode', name: 'Coding: Full Code', description: 'Show the whole function written so far' },
             { key: 'codingDryRun', name: 'Coding: Dry Run', description: 'Walk the example through the code' },
             { key: 'codingExit', name: 'Coding: Exit', description: 'Leave coding mode and go back to normal answers' },
-            { key: 'typeAlongBack', name: 'Type-along: Line Back', description: 'Move the line to type back one, when it gets ahead of the editor' },
-            { key: 'typeAlongNext', name: 'Type-along: Line Forward', description: 'Skip to the next line to type; Enter also moves forward' },
         ];
     }
 

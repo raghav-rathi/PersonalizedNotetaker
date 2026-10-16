@@ -1,6 +1,9 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { CodingSession } = require('./codingSession');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { CodingSession, loadCodingSkill, ensureUserSkillFile } = require('./codingSession');
 
 test('each turn sees the problem, every earlier reply so far, and its own message last', () => {
     const session = new CodingSession();
@@ -35,4 +38,17 @@ test('a failed turn leaves the conversation, and a new problem starts empty', ()
     session.startProblem();
     const fresh = session.addTurn({ text: 'NEW PROBLEM' });
     assert.deepEqual(session.messagesThrough(fresh), [{ role: 'user', text: 'NEW PROBLEM', imageJpeg: null }]);
+});
+
+test('the round picks its prompt, a copy in the settings folder wins, and other profiles keep the DSA round', () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'round-prompt-'));
+    assert.match(loadCodingSkill('lld', configDir), /low-level design/i);
+    assert.match(loadCodingSkill('hld', configDir), /system design/i);
+    assert.equal(loadCodingSkill('interview', configDir), loadCodingSkill('coding', configDir));
+    const copy = ensureUserSkillFile('hld', configDir);
+    fs.writeFileSync(copy, 'my edited HLD prompt');
+    assert.equal(loadCodingSkill('hld', configDir), 'my edited HLD prompt');
+    // A second open keeps the edits.
+    ensureUserSkillFile('hld', configDir);
+    assert.equal(fs.readFileSync(copy, 'utf8'), 'my edited HLD prompt');
 });

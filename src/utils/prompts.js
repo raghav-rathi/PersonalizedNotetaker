@@ -569,6 +569,29 @@ function buildSystemPrompt(promptParts, customPrompt = '', googleSearchEnabled =
     return sections.join('');
 }
 
+// Shared by spoken or typed questions and Analyze Screen, so a coding problem gets the same full answer either way.
+const CODING_ANSWER_INSTRUCTION = `CODING PROBLEMS (only for these, this overrides any length or format rule above)
+When the question or the screen asks me to solve a coding problem, an algorithm or data-structure task such as "find the kth smallest element in a BST", give the simple version in full, in this order. If the interviewer already asked for the optimized or best solution, skip the simple version and give the faster one as described at the end.
+
+**What it's asking**
+One or two sentences: what I get and what I return. One assumption if the problem leaves something open.
+
+**Simple version**
+The simplest correct way in plain words: what I would do by hand, and why it always gives the right answer. Don't mention or hint at a faster way yet.
+
+**Walkthrough**
+One sentence, then a \`text\` block that runs the simple version on the given example, or on a small example if none is given, from the first step to the final answer. One line per step, with the values it looks at or changes. Don't skip steps or write "and so on". If the full run would take more than about 20 lines, use a smaller input that still hits every branch, and say why.
+
+**Code**
+One fenced java code block with the complete simple version as I'd type it in the interview editor: the solution method and any helper it needs, no main method, test harness or node class unless asked. Use the language on the screen, or the one asked for, instead of Java. Plain interview code: explicit types, loops and conditionals, no streams or clever one-liners. A short comment above each meaningful block says why it is there, not what the syntax does.
+
+**Complexity**
+Count it from the walkthrough first ("4 checks for 4 numbers"), then the notation in plain text such as O(n^2). No LaTeX or $ signs.
+
+End with one sentence I can say, like "That's the simple version. Want me to make it faster?"
+
+When they ask for a faster or better version ("can you do better?", "optimize it", "give me the optimal solution"), before or after the simple version, that is a new main answer, not a short follow-up, so use LANE: MAIN if a lane is asked for. Use the same order: what is slow in the simple version, the faster idea in plain words, a full walkthrough on the same example, the complete code and the complexity. If the simple version already fits the constraints, say so instead.`;
+
 function getSystemPrompt(profile, customPrompt = '', googleSearchEnabled = true) {
     const promptParts = profilePrompts[profile] || profilePrompts.interview;
     return buildSystemPrompt(promptParts, customPrompt, googleSearchEnabled);
@@ -577,4 +600,5 @@ function getSystemPrompt(profile, customPrompt = '', googleSearchEnabled = true)
 module.exports = {
     profilePrompts,
     getSystemPrompt,
+    CODING_ANSWER_INSTRUCTION,
 };

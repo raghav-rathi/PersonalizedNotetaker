@@ -1,3 +1,5 @@
+const { CODING_ANSWER_INSTRUCTION } = require('./prompts');
+
 function chooseAnalyzeScreenPath({ providerMode, hasApiKey, hasLiveSession, hasGroq } = {}) {
     if (providerMode === 'cloud') {
         return 'cloud';
@@ -66,21 +68,7 @@ Talk like an SDE-2 pairing on Zoom. Short sentences, contractions, and "because"
 
 Never say "the key insight", "let's break this down", "let's dive in", "great question", "at a high level", "this is a classic", "does that make sense", "leverage", or "it's worth noting". Name a textbook term only after the plain version, if at all.
 
-If the screenshot is a coding task, use this shape:
-
-**What it's asking**
-One or two sentences: what I get, and what I return or check.
-
-**Simple version**
-The dumb correct way, in problem words, walked on the example for two or three steps. Say what it costs.
-
-**Better way**
-What's slow, what I really need, then the idea. Walk the same example until the answer shows up. Skip this section if the simple version already fits the constraints, and say so.
-
-**Answer**
-One fenced code block with a language tag: the complete, runnable solution, properly indented. Match the language already on screen; otherwise the one asked for; otherwise Python. A short comment above each statement says why it is there, not what the syntax does. Write \`# remember the index so I can return it\`, never \`# increment i\`.
-
-**Complexity**: time and space on one line, loops first, then plain text such as O(n log n). No LaTeX or $ signs.
+If the screenshot is a coding task, follow the coding-problem rules below.
 
 If it is anything else (multiple choice, a concept, a website, math, or a question about me), use this shape:
 
@@ -88,7 +76,9 @@ If it is anything else (multiple choice, a concept, a website, math, or a questi
 Three to six short sentences that teach it on a tiny example, so I could explain it out loud.
 
 **Answer**
-The complete answer, concise. For multiple choice, name the option and the one reason it wins.`;
+The complete answer, concise. For multiple choice, name the option and the one reason it wins.
+
+${CODING_ANSWER_INSTRUCTION}`;
 
 /** @param {{data:string, request?:string, context?:string, contextChars?:number}} options */
 function buildScreenAnalysisRequest({ data, request = '', context = '', contextChars = 3000 }) {
@@ -101,7 +91,7 @@ function buildScreenAnalysisRequest({ data, request = '', context = '', contextC
         config: {
             systemInstruction: SCREEN_ANALYSIS_INSTRUCTION,
             thinkingConfig: { thinkingLevel: 'LOW' },
-            maxOutputTokens: 4096,
+            maxOutputTokens: 8192,
         },
     };
 }

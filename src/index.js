@@ -18,6 +18,19 @@ if (process.platform === 'win32') {
     app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
 }
 
+// A Finder-launched app has no terminal, so keep the main-process log in ~/Library/Logs/<app>/main.log.
+if (app.isPackaged) {
+    const util = require('node:util');
+    const log = require('node:fs').createWriteStream(path.join(app.getPath('logs'), 'main.log'), { flags: 'w' });
+    for (const level of ['log', 'info', 'warn', 'error']) {
+        const original = console[level];
+        console[level] = (...args) => {
+            log.write(`${new Date().toISOString()} ${level} ${util.format(...args)}\n`);
+            original(...args);
+        };
+    }
+}
+
 const { createWindow } = require('./utils/window');
 const { setupGeminiIpcHandlers, stopMacOSAudioCapture, sendToRenderer } = require('./utils/gemini');
 const storage = require('./storage');
@@ -118,6 +131,8 @@ app.whenReady().then(async () => {
     createTray();
     stopDiagnostics = startDiagnostics({ app, BrowserWindow, directory: path.join(app.getPath('logs'), 'diagnostics') });
     setupGeminiIpcHandlers(geminiSessionRef);
+    // The settings-folder prompt can link into ~/Downloads; read it now so any macOS access prompt shows at launch.
+    require('./utils/codingSession').loadCodingSkill();
     setupStorageIpcHandlers();
     setupGeneralIpcHandlers();
 });

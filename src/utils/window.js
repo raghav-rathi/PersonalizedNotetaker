@@ -1,7 +1,7 @@
 const { BrowserWindow, globalShortcut, ipcMain, screen, Menu } = require('electron');
 const path = require('node:path');
 const storage = require('../storage');
-const { startOptionTapMonitor, stopOptionTapMonitor, setEnterListener } = require('./optionTapMonitor');
+const { startOptionTapMonitor, stopOptionTapMonitor } = require('./optionTapMonitor');
 const { handleCodingCommand } = require('./gemini');
 const {
     canRegisterGlobalShortcut,
@@ -12,12 +12,17 @@ const {
     getOverlayBackgroundColor,
     shouldShowWindowOnCreate,
 } = require('./overlayVisibility');
-const { clampBoundsToWorkArea } = require('./windowBounds');
+const { clampBoundsToWorkArea, resizeBounds } = require('./windowBounds');
 
 let mouseEventsIgnored = false;
 let stealthHidden = false;
 let lastVisibilityToggleAt = 0;
 let windowIpcContext = null;
+// The live overlay remembers its own size and place: 'live' for normal answers, 'coding' in coding mode,
+// null while the full app window shows. Saved in preferences as overlayBounds.
+let overlayMode = null;
+let resizeStart = null;
+let saveBoundsTimer = null;
 let windowIpcRegistered = false;
 
 function isOverlayShown(mainWindow) {
@@ -44,6 +49,17 @@ function hideOverlayWindow(mainWindow) {
 }
 
 function restoreOverlayWindow(mainWindow) {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    // A hidden Dock icon makes macOS ignore showInactive() on a normal window, and hiding
+    // the Dock icon again immediately after show() takes the window back down.
+    if (process.platform === 'darwin') {
+        mainWindow.showInactive();
+        if (!mainWindow.isVisible()) mainWindow.show();
+        mainWindow.setAlwaysOnTop(true, 'floating');
+        mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+        if (typeof mainWindow.moveTop === 'function') mainWindow.moveTop();
+        return;
+    }
     if (getOverlayRestoreMethod(process.platform) === 'show') {
         mainWindow.show();
         mainWindow.setAlwaysOnTop(true, 'screen-saver', 1);
@@ -132,6 +148,7 @@ function createWindow(sendToRenderer, geminiSessionRef) {
         transparent: shouldUseTransparentOverlay(process.platform),
         hasShadow: false,
         alwaysOnTop: true,
+        ...(process.platform === 'darwin' ? { type: 'panel' } : {}),
         skipTaskbar: isWin,
         roundedCorners: !isWin,
         autoHideMenuBar: true,
@@ -188,16 +205,22 @@ function createWindow(sendToRenderer, geminiSessionRef) {
     const startHideShortcut = () => {
         if (hookStartedForWindow || mainWindow.isDestroyed()) return;
         hookStartedForWindow = true;
-        const optionMonitorReady = startOptionTapMonitor(() => {
-            toggleOverlayVisibility(mainWindow);
-        });
-        if (!optionMonitorReady) {
-            console.warn(
-                isWin
-                    ? 'Alt tap hide is unavailable; Ctrl+\\ still toggles visibility.'
-                    : 'Option tap hide requires Accessibility on macOS; Cmd+\\ still toggles visibility.'
-            );
-        }
+        const startMonitor = () => startOptionTapMonitor(() => toggleOverlayVisibility(mainWindow));
+        if (startMonitor()) return;
+        console.warn(
+            isWin
+                ? 'Alt tap hide is unavailable; Ctrl+\\ still toggles visibility.'
+                : 'Option tap hide requires Accessibility on macOS; Cmd+\\ still toggles visibility.'
+        );
+        if (isWin) return;
+        // The packaged app gets Accessibility only after launch (a terminal run borrows the
+        // terminal's grant), so start the Option hook as soon as the user allows it.
+        const retry = setInterval(() => {
+            if (mainWindow.isDestroyed()) return clearInterval(retry);
+            if (!startMonitor()) return;
+            clearInterval(retry);
+            console.log('Accessibility granted; Option tap hide is on');
+        }, 2000);
     };
 
     if (isWin) {
@@ -273,9 +296,6 @@ function getDefaultKeybinds() {
         codingFullCode: isMac ? 'Cmd+Alt+5' : 'Alt+Shift+5',
         codingDryRun: isMac ? 'Cmd+Alt+6' : 'Alt+Shift+6',
         codingExit: isMac ? 'Cmd+Alt+9' : 'Alt+Shift+9',
-        // Type-along: move the highlighted line back or forward when it gets out of step with the editor.
-        typeAlongBack: isMac ? 'Cmd+Alt+Up' : 'Alt+Shift+Up',
-        typeAlongNext: isMac ? 'Cmd+Alt+Down' : 'Alt+Shift+Down',
     };
 }
 
@@ -340,14 +360,16 @@ function updateGlobalShortcuts(keybinds, mainWindow, sendToRenderer, geminiSessi
         console.log(`Skipping globalShortcut for toggleVisibility: ${keybinds.toggleVisibility} (handled by Alt tap)`);
     }
 
-    if (process.platform === 'win32' && keybinds.toggleVisibility === 'Alt') {
+    // Alt/Option needs the key hook; keep a real shortcut so a hidden overlay can always come back.
+    const fallbackToggle = { win32: 'Ctrl+\\', darwin: 'Cmd+\\' }[process.platform];
+    if (fallbackToggle && keybinds.toggleVisibility === 'Alt') {
         try {
-            globalShortcut.register('Ctrl+\\', () => {
+            globalShortcut.register(fallbackToggle, () => {
                 toggleOverlayVisibility(mainWindow);
             });
-            console.log('Registered fallback toggleVisibility: Ctrl+\\');
+            console.log(`Registered fallback toggleVisibility: ${fallbackToggle}`);
         } catch (error) {
-            console.error('Failed to register fallback toggleVisibility (Ctrl+\\):', error);
+            console.error(`Failed to register fallback toggleVisibility (${fallbackToggle}):`, error);
         }
     }
 
@@ -454,8 +476,6 @@ function updateGlobalShortcuts(keybinds, mainWindow, sendToRenderer, geminiSessi
         codingFullCode: () => runCodingCommand('full'),
         codingDryRun: () => runCodingCommand('dryrun'),
         codingExit: () => runCodingCommand('exit'),
-        typeAlongBack: () => sendToRenderer('type-along-move', -1),
-        typeAlongNext: () => sendToRenderer('type-along-move', 1),
     };
     for (const [action, run] of Object.entries(commandActions)) {
         const keybind = keybinds[action];
@@ -498,18 +518,70 @@ function updateGlobalShortcuts(keybinds, mainWindow, sendToRenderer, geminiSessi
     }
 }
 
+/** @param {'live'|'coding'} mode */
+function savedOverlayBounds(mode) {
+    const saved = storage.getPreferences().overlayBounds?.[mode];
+    return saved && [saved.x, saved.y, saved.width, saved.height].every(Number.isFinite) ? saved : null;
+}
+
+function saveOverlayBounds(mainWindow) {
+    if (!overlayMode) return;
+    const overlayBounds = { ...(storage.getPreferences().overlayBounds || {}), [overlayMode]: mainWindow.getBounds() };
+    storage.updatePreference('overlayBounds', overlayBounds);
+}
+
+/** Keeps the overlay on the display it is on, at least the minimum size. */
+function applyOverlayBounds(mainWindow, bounds) {
+    const display = screen.getDisplayMatching(bounds) || screen.getPrimaryDisplay();
+    const next = clampBoundsToWorkArea(bounds, display.workArea);
+    setWindowFrame(mainWindow, next.width, next.height, next.x, next.y);
+}
+
 function setupWindowIpcHandlers(mainWindow, sendToRenderer, geminiSessionRef) {
     windowIpcContext = { mainWindow, sendToRenderer, geminiSessionRef };
+
+    // The overlay is resized from handles drawn on its edges, because a transparent frameless window has none.
+    ipcMain.on('overlay-resize-start', () => {
+        const { mainWindow } = windowIpcContext || {};
+        if (mainWindow && !mainWindow.isDestroyed()) resizeStart = mainWindow.getBounds();
+    });
+    ipcMain.on('overlay-resize', (event, { edge, dx, dy } = {}) => {
+        const { mainWindow } = windowIpcContext || {};
+        if (!resizeStart || !mainWindow || mainWindow.isDestroyed()) return;
+        applyOverlayBounds(mainWindow, resizeBounds(resizeStart, String(edge || ''), Number(dx) || 0, Number(dy) || 0));
+    });
+    ipcMain.on('overlay-resize-end', () => {
+        const { mainWindow } = windowIpcContext || {};
+        resizeStart = null;
+        if (mainWindow && !mainWindow.isDestroyed()) saveOverlayBounds(mainWindow);
+    });
+    // Dragging the top bar or Option+arrows moves the overlay; remember where it ended up.
+    mainWindow.on('moved', () => {
+        clearTimeout(saveBoundsTimer);
+        saveBoundsTimer = setTimeout(() => !mainWindow.isDestroyed() && saveOverlayBounds(mainWindow), 300);
+    });
     if (windowIpcRegistered) return;
     windowIpcRegistered = true;
+    ipcMain.on('coding-layout', (event, coding) => {
+        const { mainWindow } = windowIpcContext || {};
+        if (!mainWindow || mainWindow.isDestroyed()) return;
+        overlayMode = coding ? 'coding' : 'live';
+        const bounds = mainWindow.getBounds();
+        const width = coding ? 1100 : 850;
+        // With no saved size, grow or shrink around the current centre, so a window the user moved stays where it is.
+        const next = savedOverlayBounds(overlayMode) || { ...bounds, x: bounds.x + Math.round((bounds.width - width) / 2), width };
+        applyOverlayBounds(mainWindow, next);
+    });
+
     ipcMain.on('view-changed', (event, view) => {
         const { mainWindow } = windowIpcContext || {};
         if (!mainWindow) return;
         if (!mainWindow.isDestroyed()) {
             if (view === 'assistant') {
-                const live = getTopCenteredBounds(850, 400);
-                setWindowFrame(mainWindow, live.width, live.height, live.x, live.y);
+                overlayMode = 'live';
+                applyOverlayBounds(mainWindow, savedOverlayBounds('live') || getTopCenteredBounds(850, 400));
             } else {
+                overlayMode = null;
                 const full = getTopCenteredBounds(1100, 800);
                 setWindowFrame(mainWindow, full.width, full.height, full.x, full.y);
                 mainWindow.setIgnoreMouseEvents(false);
@@ -531,12 +603,6 @@ function setupWindowIpcHandlers(mainWindow, sendToRenderer, geminiSessionRef) {
         if (!mainWindow.isDestroyed()) {
             updateGlobalShortcuts(newKeybinds, mainWindow, sendToRenderer, geminiSessionRef);
         }
-    });
-
-    // The overlay reports when type-along is showing; only then do Enter presses in other apps reach it.
-    ipcMain.on('type-along-active', (event, active) => {
-        const { sendToRenderer } = windowIpcContext || {};
-        setEnterListener(active && sendToRenderer ? () => sendToRenderer('type-along-enter') : null);
     });
 
     ipcMain.handle('toggle-window-visibility', async event => {

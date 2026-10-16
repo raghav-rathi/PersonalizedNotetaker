@@ -7,10 +7,16 @@ const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 // firstTextMs is how long the model may take to show its first text before Gemini answers instead.
 // Astra and Sol start in 1-3 s. Opus at medium effort thinks first: in a 2026-10-09 test of 16 interview
 // answers its first text came after a median 5.2 s and at most 13.8 s.
+// Sonnet and Haiku sometimes think first: on 2026-10-16 a follow-up or a screenshot problem took them 6 to 12 s to start,
+// against about 1.7 s on a main step.
 const ANSWER_MODELS = [
     { id: 'openai/gpt-6-astra', label: 'GPT-6 Astra', effort: 'low', provider: 'openai', firstTextMs: 8000 },
     { id: 'anthropic/claude-opus-5.5', label: 'Claude Opus 5.5', effort: 'medium', provider: 'anthropic', firstTextMs: 20000 },
-    { id: 'openai/gpt-6.1-sol', label: 'GPT-6.1 Sol (cheapest, for testing)', effort: 'low', provider: 'openai', firstTextMs: 8000 },
+    { id: 'anthropic/claude-sonnet-5.5', label: 'Claude Sonnet 5.5', effort: 'low', provider: 'anthropic', firstTextMs: 15000 },
+    { id: 'openai/gpt-6.1-sol', label: 'GPT-6.1 Sol', effort: 'low', provider: 'openai', firstTextMs: 8000 },
+    // DeepSeek's best (V4 Pro) can't read screenshots, so the Flash model, which can.
+    { id: 'deepseek/deepseek-v4.1-flash', label: 'DeepSeek V4.1 Flash (very cheap)', effort: 'low', provider: 'deepseek', firstTextMs: 8000 },
+    { id: 'anthropic/claude-haiku-5.5', label: 'Claude Haiku 5.5 (cheapest, for testing)', effort: 'low', provider: 'anthropic', firstTextMs: 15000 },
 ];
 
 /** @typedef {typeof ANSWER_MODELS[number]} AnswerModel */

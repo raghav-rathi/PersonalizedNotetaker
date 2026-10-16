@@ -37,6 +37,8 @@ export class AssistantView extends LitElement {
             display: flex;
             flex-direction: column;
             gap: var(--space-md);
+            /* room under the last card for the Analyze Screen button */
+            padding-bottom: 56px;
         }
 
         .answer-card {
@@ -49,6 +51,38 @@ export class AssistantView extends LitElement {
 
         .answer-card.focused {
             border-color: var(--border-strong);
+        }
+
+        /* A card with code shows the explanation on the left and the code on the right, each scrolling on its own */
+        .answer-body.split {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+            gap: var(--space-md);
+        }
+
+        .answer-body.split > .answer-col {
+            max-height: 70vh;
+            overflow-y: auto;
+            min-width: 0;
+        }
+
+        .answer-body.split > .answer-col.code pre:first-child {
+            margin-top: 0;
+        }
+
+        .answer-body.split > .answer-col.code pre code {
+            font-size: 0.75em;
+        }
+
+        /* A narrow overlay stacks the explanation above the code, and the card scrolls as one */
+        @media (max-width: 760px) {
+            .answer-body.split {
+                grid-template-columns: minmax(0, 1fr);
+            }
+            .answer-body.split > .answer-col {
+                max-height: none;
+                overflow-y: visible;
+            }
         }
 
         .answer-label {
@@ -67,7 +101,7 @@ export class AssistantView extends LitElement {
 
         .jump-latest {
             position: absolute;
-            right: var(--space-md);
+            right: calc(var(--space-md) + 48px);
             bottom: var(--space-md);
             z-index: 2;
             border: 1px solid var(--border);
@@ -283,48 +317,6 @@ export class AssistantView extends LitElement {
             background: #444444;
         }
 
-        /* ── Type-along: the line to type now, with the one before and after ── */
-
-        .type-along {
-            flex-shrink: 0;
-            border-top: 1px solid var(--border);
-            background: var(--bg-surface);
-            padding: var(--space-xs) var(--space-md);
-        }
-
-        .type-along * {
-            font-family: var(--font-mono);
-        }
-
-        .type-along-head {
-            display: flex;
-            justify-content: space-between;
-            font-size: var(--font-size-xs);
-            color: var(--text-muted);
-            user-select: none;
-        }
-
-        .type-along-line {
-            white-space: pre;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            font-size: 13px;
-            line-height: 1.5;
-            padding-left: 8px;
-            color: var(--text-secondary);
-        }
-
-        .type-along-line.before {
-            opacity: 0.45;
-        }
-
-        .type-along-line.current {
-            font-size: 15px;
-            color: var(--text-primary);
-            border-left: 2px solid var(--accent);
-            padding-left: 6px;
-        }
-
         /* ── Bottom input bar ── */
 
         .input-bar {
@@ -367,21 +359,23 @@ export class AssistantView extends LitElement {
             color: var(--text-muted);
         }
 
+        /* Always on screen at the bottom right, over the answers */
         .analyze-btn {
-            position: relative;
+            position: absolute;
+            right: var(--space-md);
+            bottom: var(--space-md);
+            z-index: 3;
             background: var(--bg-elevated);
             border: 1px solid var(--border);
             color: var(--text-primary);
             cursor: pointer;
-            font-size: var(--font-size-xs);
-            font-family: var(--font-mono);
-            white-space: nowrap;
-            padding: var(--space-xs) var(--space-md);
-            border-radius: 100px;
-            height: 32px;
+            padding: 0;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
             display: flex;
             align-items: center;
-            gap: 4px;
+            justify-content: center;
             transition:
                 border-color 0.4s ease,
                 background var(--transition);
@@ -430,9 +424,9 @@ export class AssistantView extends LitElement {
         onSendText: { type: Function },
         shouldAnimateResponse: { type: Boolean },
         isAnalyzing: { type: Boolean, state: true },
+        // The message box stays hidden until the user types into the overlay.
+        _inputOpen: { type: Boolean, state: true },
         _showJumpToLatest: { type: Boolean, state: true },
-        // {lines, line} from the app root while coding mode shows a card with code, else null
-        typeAlong: { type: Object },
     };
 
     constructor() {
@@ -444,8 +438,8 @@ export class AssistantView extends LitElement {
         this.currentResponseIndex = -1;
         this.selectedProfile = 'interview';
         this.onSendText = () => {};
+        this._inputOpen = false;
         this.isAnalyzing = false;
-        this.typeAlong = null;
         this._animFrame = null;
         this._showJumpToLatest = false;
         this._cardCount = 0;
@@ -465,7 +459,9 @@ export class AssistantView extends LitElement {
     getProfileNames() {
         return {
             interview: 'Job Interview',
+            coding: 'Coding Round (DSA)',
             lld: 'LLD Interview (SDE-2)',
+            hld: 'HLD / System Design',
             sales: 'Sales Call',
             meeting: 'Business Meeting',
             presentation: 'Presentation',
@@ -624,6 +620,7 @@ export class AssistantView extends LitElement {
             else if (this.isAnalyzing) this._startWaveformAnimation();
         };
         document.addEventListener('visibilitychange', this._visibilityHandler);
+        window.addEventListener('keydown', this._openInputOnType);
 
         if (window.require) {
             const { ipcRenderer } = window.require('electron');
@@ -645,6 +642,7 @@ export class AssistantView extends LitElement {
         this._stopWaveformAnimation();
         this._disconnectLatestObserver();
         if (this._visibilityHandler) document.removeEventListener('visibilitychange', this._visibilityHandler);
+        window.removeEventListener('keydown', this._openInputOnType);
         if (this._analyzeTimeout) {
             clearTimeout(this._analyzeTimeout);
             this._analyzeTimeout = null;
@@ -664,6 +662,7 @@ export class AssistantView extends LitElement {
         if (textInput && textInput.value.trim()) {
             const message = textInput.value.trim();
             textInput.value = '';
+            this._inputOpen = false;
             await this.onSendText(message);
         }
     }
@@ -672,7 +671,31 @@ export class AssistantView extends LitElement {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
             this.handleSendText();
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            e.target.value = '';
+            this._inputOpen = false;
         }
+    }
+
+    // Typing into the overlay opens the message box with that first key already in it.
+    _openInputOnType = async e => {
+        if (this._inputOpen || e.isComposing) return;
+        const paste = (e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === 'v';
+        const printable = e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey;
+        if (!paste && !printable) return;
+        if (printable) e.preventDefault();
+        this._inputOpen = true;
+        await this.updateComplete;
+        const input = this.shadowRoot.querySelector('#textInput');
+        if (!input) return;
+        if (printable) input.value = e.key;
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+    };
+
+    _closeEmptyInput(e) {
+        if (!e.target.value.trim()) this._inputOpen = false;
     }
 
     async handleScreenAnswer() {
@@ -908,7 +931,12 @@ export class AssistantView extends LitElement {
         const body = card.querySelector('.answer-body');
         if (!body) return;
         if (this._renderedContent.get(card) === content) return;
-        body.innerHTML = this.renderMarkdown(content);
+        const { splitCodeColumn } = window.require('./utils/answerFormatting');
+        const { left, right } = splitCodeColumn(content);
+        body.classList.toggle('split', Boolean(right));
+        body.innerHTML = right
+            ? `<div class="answer-col">${this.renderMarkdown(left)}</div><div class="answer-col code">${this.renderMarkdown(right)}</div>`
+            : this.renderMarkdown(content);
         this._renderedContent.set(card, content);
     }
 
@@ -1009,23 +1037,6 @@ export class AssistantView extends LitElement {
         }
     }
 
-    _renderTypeAlong() {
-        if (!this.typeAlong) return '';
-        const { lines, line } = this.typeAlong;
-        if (line >= lines.length) {
-            return html`<div class="type-along">
-                <div class="type-along-head"><span>Type along</span><span>all ${lines.length} lines typed</span></div>
-                <div class="type-along-line">Done. Next step when you're ready.</div>
-            </div>`;
-        }
-        return html`<div class="type-along">
-            <div class="type-along-head"><span>Type along: say it, type it, press Enter</span><span>line ${line + 1} of ${lines.length}</span></div>
-            ${line > 0 ? html`<div class="type-along-line before">${lines[line - 1]}</div>` : ''}
-            <div class="type-along-line current">${lines[line]}</div>
-            ${line + 1 < lines.length ? html`<div class="type-along-line">${lines[line + 1]}</div>` : ''}
-        </div>`;
-    }
-
     render() {
         return html`
             <div class="transcript-wrap">
@@ -1033,15 +1044,12 @@ export class AssistantView extends LitElement {
                 <button class="jump-latest" ?hidden=${!this._showJumpToLatest} @click=${() => this.jumpToLatest()} type="button">
                     Jump to latest
                 </button>
-            </div>
-
-            ${this._renderTypeAlong()}
-
-            <div class="input-bar">
-                <div class="input-bar-inner">
-                    <input type="text" id="textInput" placeholder="Type a message..." @keydown=${this.handleTextKeydown} />
-                </div>
-                <button class="analyze-btn ${this.isAnalyzing ? 'analyzing' : ''}" @click=${this.handleScreenAnswer}>
+                <button
+                    class="analyze-btn ${this.isAnalyzing ? 'analyzing' : ''}"
+                    @click=${this.handleScreenAnswer}
+                    title="Analyze Screen (⌘↵)"
+                    type="button"
+                >
                     <canvas class="analyze-canvas"></canvas>
                     <span class="analyze-btn-content">
                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24">
@@ -1054,10 +1062,25 @@ export class AssistantView extends LitElement {
                                 d="M13 3v7h6l-8 11v-7H5z"
                             />
                         </svg>
-                        Analyze Screen
                     </span>
                 </button>
             </div>
+
+            ${
+                this._inputOpen
+                    ? html`<div class="input-bar">
+                          <div class="input-bar-inner">
+                              <input
+                                  type="text"
+                                  id="textInput"
+                                  placeholder="Type a message..."
+                                  @keydown=${this.handleTextKeydown}
+                                  @blur=${this._closeEmptyInput}
+                              />
+                          </div>
+                      </div>`
+                    : ''
+            }
         `;
     }
 }

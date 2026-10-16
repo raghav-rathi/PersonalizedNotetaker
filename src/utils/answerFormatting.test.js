@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { formatLiveAnswerText, formatAnswerForDisplay } = require('./answerFormatting');
+const { formatLiveAnswerText, formatAnswerForDisplay, splitCodeColumn } = require('./answerFormatting');
 
 test('splits Question / Answer / Why labels into separate paragraphs', () => {
     const text = '**Question**: Is there a src folder? **Answer**: Yes. **Why**: It is visible on the left.';
@@ -44,4 +44,26 @@ test('script labels outside code become reading cues, and code blocks stay exact
             '**Edit** replace line 3',
         ].join('\n')
     );
+});
+
+test('a trace walkthrough is read, not typed, and stays in the explanation column', () => {
+    const answer = [
+        'I can relate this to a BST.',
+        '```trace',
+        'visit 1 -> count=1',
+        '```',
+        '```java',
+        'int kth(Node root, int k) {',
+        '```',
+        'That is O(h + k).',
+    ].join('\n');
+    assert.deepEqual(splitCodeColumn(answer), {
+        left: ['I can relate this to a BST.', '```trace', 'visit 1 -> count=1', '```', 'That is O(h + k).'].join('\n'),
+        right: ['```java', 'int kth(Node root, int k) {', '```'].join('\n'),
+    });
+});
+
+test('a code block still streaming goes to the code column, and prose alone has no code column', () => {
+    assert.deepEqual(splitCodeColumn('Say this.\n```java\nint x = 1;'), { left: 'Say this.', right: '```java\nint x = 1;' });
+    assert.deepEqual(splitCodeColumn('Just words.'), { left: 'Just words.', right: '' });
 });

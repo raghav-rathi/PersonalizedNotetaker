@@ -393,7 +393,7 @@ function setupWindowsLoopbackProcessing() {
 }
 
 const MANUAL_SCREENSHOT_PROMPT = `Look at this screenshot.
-If it is a coding question, teach the logic in plain words, then give the full solution.
+If it is a coding question, give the simple version in full: the idea, a complete walkthrough of the example, its complete code and its complexity. Give the faster version instead only if I or the interviewer asked for it.
 If it is anything else, teach the idea simply, then give the answer.`;
 
 let screenshotSendInFlight = false;

@@ -42,6 +42,47 @@ export class CheatingDaddyApp extends LitElement {
             overflow: hidden;
         }
 
+        /* The live overlay is resized from its edges; the top bar below them still drags it around */
+        .resize-handle {
+            position: fixed;
+            z-index: 1000;
+            -webkit-app-region: no-drag;
+        }
+        .resize-handle.left,
+        .resize-handle.right {
+            top: 36px;
+            bottom: 0;
+            width: 5px;
+            cursor: ew-resize;
+        }
+        .resize-handle.left {
+            left: 0;
+        }
+        .resize-handle.right {
+            right: 0;
+        }
+        .resize-handle.bottom {
+            left: 0;
+            right: 0;
+            bottom: 0;
+            height: 5px;
+            cursor: ns-resize;
+        }
+        .resize-handle.bottom-left,
+        .resize-handle.bottom-right {
+            bottom: 0;
+            width: 12px;
+            height: 12px;
+        }
+        .resize-handle.bottom-left {
+            left: 0;
+            cursor: nesw-resize;
+        }
+        .resize-handle.bottom-right {
+            right: 0;
+            cursor: nwse-resize;
+        }
+
         .top-drag-bar {
             position: fixed;
             top: 0;
@@ -361,6 +402,13 @@ export class CheatingDaddyApp extends LitElement {
             white-space: nowrap;
         }
 
+        /* A narrow overlay keeps the tabs and [hide], and drops the status and the clock */
+        @media (max-width: 600px) {
+            .live-bar-text.optional {
+                display: none;
+            }
+        }
+
         .live-bar-text.clickable {
             cursor: pointer;
             transition: color var(--transition);
@@ -475,9 +523,6 @@ export class CheatingDaddyApp extends LitElement {
         this._unseen = { main: 0, side: 0 };
         this._trimmed = { main: 0, side: 0 };
         this._screenViewCache = null;
-        // Type-along: the line reached in each coding card, by turn id, and whether Enter is being listened to.
-        this._typeAlongLine = new Map();
-        this._typeAlongActive = false;
 
         this._loadFromStorage();
         this._checkForUpdates();
@@ -557,13 +602,6 @@ export class CheatingDaddyApp extends LitElement {
                 this.codingMode = Boolean(data?.active);
             });
             ipcRenderer.on('switch-answer-screen', (_, screen) => this.switchScreen(screen));
-            // Enter in the overlay's own message box sends a message; it is not a line typed in the editor.
-            ipcRenderer.on('type-along-enter', () => {
-                const view = this.shadowRoot?.querySelector('assistant-view');
-                if (document.hasFocus() && view?.shadowRoot?.activeElement?.id === 'textInput') return;
-                this._moveTypeAlong(1);
-            });
-            ipcRenderer.on('type-along-move', (_, delta) => this._moveTypeAlong(delta));
         }
 
         this._optionHeld = false;
@@ -614,9 +652,6 @@ export class CheatingDaddyApp extends LitElement {
             ipcRenderer.removeAllListeners('stealth-hidden-changed');
             ipcRenderer.removeAllListeners('coding-mode-changed');
             ipcRenderer.removeAllListeners('switch-answer-screen');
-            ipcRenderer.removeAllListeners('type-along-enter');
-            ipcRenderer.removeAllListeners('type-along-move');
-            ipcRenderer.send('type-along-active', false);
         }
         if (this._answerFlushTimer) clearTimeout(this._answerFlushTimer);
     }
@@ -752,25 +787,6 @@ export class CheatingDaddyApp extends LitElement {
         return view;
     }
 
-    // Type-along follows the focused card on the main screen while coding mode is on.
-    _typeAlongView() {
-        if (!this.codingMode || this.activeScreen !== 'main' || this.currentView !== 'assistant') return null;
-        const turnId = this._screenFocus.main;
-        const index = this._answerTurnIds.indexOf(turnId);
-        if (index < 0) return null;
-        const { typedLines } = window.require('./utils/typeAlong');
-        const lines = typedLines(this.responses[index]);
-        if (!lines.length) return null;
-        return { turnId, lines, line: Math.min(this._typeAlongLine.get(turnId) || 0, lines.length) };
-    }
-
-    _moveTypeAlong(delta) {
-        const view = this._typeAlongView();
-        if (!view) return;
-        this._typeAlongLine.set(view.turnId, Math.max(0, Math.min(view.lines.length, view.line + delta)));
-        this.requestUpdate();
-    }
-
     handleAnswerEvent(event) {
         if (event.event === 'start') {
             this._applyAnswerEvent(event);
@@ -900,7 +916,6 @@ export class CheatingDaddyApp extends LitElement {
         this._trimmed = { main: 0, side: 0 };
         this.activeScreen = 'main';
         this.codingMode = false;
-        this._typeAlongLine.clear();
         this.startTime = Date.now();
         this.sessionActive = true;
         this.currentView = 'assistant';
@@ -994,11 +1009,14 @@ export class CheatingDaddyApp extends LitElement {
             ipcRenderer.send('view-changed', this.currentView);
         }
 
-        // Enter presses in other apps reach the overlay only while type-along is showing.
-        const typeAlongActive = Boolean(this._typeAlongView());
-        if (typeAlongActive !== this._typeAlongActive && window.require) {
-            this._typeAlongActive = typeAlongActive;
-            window.require('electron').ipcRenderer.send('type-along-active', typeAlongActive);
+        // Coding mode widens the live overlay so the explanation and the code fit side by side.
+        if (
+            changedProperties.has('codingMode') &&
+            changedProperties.get('codingMode') !== undefined &&
+            this.currentView === 'assistant' &&
+            window.require
+        ) {
+            window.require('electron').ipcRenderer.send('coding-layout', this.codingMode);
         }
     }
 
@@ -1072,7 +1090,6 @@ export class CheatingDaddyApp extends LitElement {
                         .selectedProfile=${this.selectedProfile}
                         .onSendText=${msg => this.handleSendText(msg)}
                         .shouldAnimateResponse=${this.shouldAnimateResponse}
-                        .typeAlong=${this._typeAlongView()}
                         @response-index-changed=${this.handleResponseIndexChanged}
                         @response-animation-complete=${() => {
                             this.shouldAnimateResponse = false;
@@ -1210,7 +1227,9 @@ export class CheatingDaddyApp extends LitElement {
 
         const profileLabels = {
             interview: 'Interview',
+            coding: 'Coding Round',
             lld: 'LLD Interview',
+            hld: 'HLD Interview',
             sales: 'Sales Call',
             meeting: 'Meeting',
             presentation: 'Presentation',
@@ -1249,8 +1268,8 @@ export class CheatingDaddyApp extends LitElement {
                     </span>
                 </div>
                 <div class="live-bar-right">
-                    ${this.statusText ? html`<span class="live-bar-text">${this.statusText}</span>` : ''}
-                    <span class="live-bar-text">${this.getElapsedTime()}</span>
+                    ${this.statusText ? html`<span class="live-bar-text optional">${this.statusText}</span>` : ''}
+                    <span class="live-bar-text optional">${this.getElapsedTime()}</span>
                     ${this._isClickThrough ? html`<span class="live-bar-text">[click through]</span>` : ''}
                     <span class="live-bar-text clickable" @click=${() => this.handleHideToggle()}>[hide]</span>
                 </div>
@@ -1281,8 +1300,47 @@ export class CheatingDaddyApp extends LitElement {
                     ${isLive ? this.renderLiveBar() : ''}
                     <div class="content-inner ${isLive ? 'live' : ''}">${this.renderCurrentView()}</div>
                 </div>
+                ${
+                    isLive
+                        ? ['left', 'right', 'bottom', 'bottom-left', 'bottom-right'].map(
+                              edge => html`<div class="resize-handle ${edge}" @pointerdown=${e => this._startResize(e, edge)}></div>`
+                          )
+                        : ''
+                }
             </div>
         `;
+    }
+
+    // Main moves the window; screen coordinates stay right while the window changes under the pointer.
+    _startResize(event, edge) {
+        if (!window.require || event.button !== 0) return;
+        event.preventDefault();
+        const { ipcRenderer } = window.require('electron');
+        const handle = event.currentTarget;
+        handle.setPointerCapture(event.pointerId);
+        const startX = event.screenX;
+        const startY = event.screenY;
+        let frame = 0;
+        let last = null;
+        const move = moveEvent => {
+            last = { edge, dx: moveEvent.screenX - startX, dy: moveEvent.screenY - startY };
+            frame ||= requestAnimationFrame(() => {
+                frame = 0;
+                ipcRenderer.send('overlay-resize', last);
+            });
+        };
+        const end = () => {
+            handle.removeEventListener('pointermove', move);
+            handle.removeEventListener('pointerup', end);
+            handle.removeEventListener('pointercancel', end);
+            cancelAnimationFrame(frame);
+            if (last) ipcRenderer.send('overlay-resize', last);
+            ipcRenderer.send('overlay-resize-end');
+        };
+        handle.addEventListener('pointermove', move);
+        handle.addEventListener('pointerup', end);
+        handle.addEventListener('pointercancel', end);
+        ipcRenderer.send('overlay-resize-start');
     }
 }
 

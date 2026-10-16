@@ -55,4 +55,36 @@ function formatAnswerForDisplay(text) {
         .replace(/\n{3,}/g, '\n\n');
 }
 
-module.exports = { formatLiveAnswerText, formatAnswerForDisplay };
+// A card with code shows the explanation beside the code: prose and `trace` walkthroughs (read, not typed)
+// on the left, every other fenced block on the right.
+const FENCE = /^\s*(`{3,}|~{3,})(.*)$/;
+const READ_ONLY_FENCE = /^\s*trace\b/i;
+
+/**
+ * @param {string} markdown an answer as shown, possibly still streaming
+ * @returns {{left:string, right:string}}
+ */
+function splitCodeColumn(markdown) {
+    const left = [];
+    const right = [];
+    let fence = '';
+    let target = left;
+    for (const line of String(markdown || '').split('\n')) {
+        const match = line.match(FENCE);
+        if (match && !fence) {
+            fence = match[1];
+            target = READ_ONLY_FENCE.test(match[2]) ? left : right;
+            target.push(line);
+            continue;
+        }
+        if (fence) {
+            target.push(line);
+            if (match && match[1][0] === fence[0] && match[1].length >= fence.length && !match[2].trim()) fence = '';
+            continue;
+        }
+        left.push(line);
+    }
+    return { left: left.join('\n').trim(), right: right.join('\n').trim() };
+}
+
+module.exports = { formatLiveAnswerText, formatAnswerForDisplay, splitCodeColumn };

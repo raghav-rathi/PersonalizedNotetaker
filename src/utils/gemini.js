@@ -1,8 +1,8 @@
 const { GoogleGenAI, ThinkingLevel } = require('@google/genai');
-const { BrowserWindow, ipcMain } = require('electron');
+const { BrowserWindow, ipcMain, shell } = require('electron');
 const { spawn } = require('child_process');
 const { saveDebugAudio } = require('../audioUtils');
-const { getSystemPrompt } = require('./prompts');
+const { getSystemPrompt, CODING_ANSWER_INSTRUCTION } = require('./prompts');
 const {
     getApiKey,
     getGroqApiKey,
@@ -34,8 +34,8 @@ const { LiveTurnWatchdog } = require('./liveTurnWatchdog');
 const { formatLiveAnswerText, formatAnswerForDisplay } = require('./answerFormatting');
 const { nextVoiceQuestion, questionText } = require('./questionMerge');
 const { streamOpenRouterAnswer, answerWithFallback, toGeminiContents, answerModelById } = require('./answerModel');
-const { LANE_INSTRUCTION, parseLaneHeader, splitSideUpdate, splitMainLesson, isReplaceableAnswer, resolveLane, isBackchannel } = require('./answerLanes');
-const { CODING_COMMANDS, EXIT_WORDS, NEW_PROBLEM_WORDS, loadCodingSkill, CodingSession } = require('./codingSession');
+const { LANE_INSTRUCTION, parseLaneHeader, splitSideUpdate, isReplaceableAnswer, resolveLane, isBackchannel } = require('./answerLanes');
+const { CODING_COMMANDS, EXIT_WORDS, NEW_PROBLEM_WORDS, loadCodingSkill, ensureUserSkillFile, CodingSession } = require('./codingSession');
 
 // Lazy-loaded to avoid circular dependency (localai.js imports from gemini.js)
 let _localai = null;
@@ -695,16 +695,10 @@ async function streamLanedAnswer({
     let lane = null;
     let card = null;
     let changedCard = null;
-    let lessonCard = null;
     let shown = '';
     let firstTextAt = 0;
 
-    const split = body => {
-        if (!codingTurn) return { answer: body, update: null, lesson: null };
-        if (lane === 'side') return { ...splitSideUpdate(body), lesson: null };
-        const { answer, lesson } = splitMainLesson(body);
-        return { answer, update: null, lesson };
-    };
+    const split = body => (codingTurn && lane === 'side' ? splitSideUpdate(body) : { answer: body, update: null });
     const show = raw => {
         if (signal.aborted) return;
         if (codingTurn) codingTurn.reply = raw;
@@ -720,7 +714,7 @@ async function streamLanedAnswer({
             claimLane(request, lane, question);
             card = createAnswerStream('answer', { turnId, sequenceBase, lane, label: shortLabel(label) });
         }
-        const { answer, update, lesson } = split(header.body);
+        const { answer, update } = split(header.body);
         if (answer.trim()) {
             firstTextAt ||= Date.now();
             shown = formatAnswerForDisplay(answer);
@@ -735,15 +729,6 @@ async function streamLanedAnswer({
                 focus: false,
             });
             changedCard.update(formatAnswerForDisplay(update));
-        }
-        if (lesson?.trim()) {
-            lessonCard ||= createAnswerStream('lesson', {
-                sequenceBase,
-                lane: 'side',
-                label: `Lesson: ${shortLabel(label, 50)}`,
-                focus: false,
-            });
-            lessonCard.update(formatAnswerForDisplay(lesson));
         }
     };
 
@@ -799,10 +784,9 @@ async function streamLanedAnswer({
     }
 
     const body = parseLaneHeader(`${result.text}\n`).body.trim();
-    const { answer, update, lesson } = split(body);
+    const { answer, update } = split(body);
     if (shown) card.complete(formatAnswerForDisplay(answer.trim()));
     if (changedCard && update) changedCard.complete(formatAnswerForDisplay(update.trim()));
-    if (lessonCard && lesson?.trim()) lessonCard.complete(formatAnswerForDisplay(lesson.trim()));
     if (codingTurn) codingTurn.reply = result.text;
     recordConversationTurn(question, (answer || body).trim());
     if (result.primaryError) console.warn(`OpenRouter answer failed (${result.primaryError.message}); Gemini answered instead`);
@@ -824,7 +808,7 @@ function sendNormalAnswer(question, { turnId = createTurnId('answer') } = {}) {
         question,
         label: question,
         turnId,
-        systemPrompt: `${currentSystemPrompt || 'You are a helpful assistant.'}\n\n${LANE_INSTRUCTION}`,
+        systemPrompt: `${currentSystemPrompt || 'You are a helpful assistant.'}\n\n${LANE_INSTRUCTION}\n\n${CODING_ANSWER_INSTRUCTION}`,
         messages: [{ role: 'user', text: userText, imageJpeg }],
     });
 }
@@ -837,7 +821,7 @@ function sendCodingTurn({ text, label, imageJpeg = null, turnId = createTurnId('
         label,
         turnId,
         lane,
-        systemPrompt: loadCodingSkill(),
+        systemPrompt: loadCodingSkill(currentProfile),
         messages: codingSession.messagesThrough(codingTurn),
         codingTurn,
     });
@@ -2147,6 +2131,17 @@ function routeAudioFrame(pcmBuffer, sampleRate, geminiSessionRef) {
 function setupGeminiIpcHandlers(geminiSessionRef) {
     // Store the geminiSessionRef globally for reconnection access
     global.geminiSessionRef = geminiSessionRef;
+
+    // Opens the round's prompt in the default editor; edits apply from the next coding reply.
+    ipcMain.handle('open-round-prompt', async (event, profile) => {
+        try {
+            const filePath = ensureUserSkillFile(profile);
+            const error = await shell.openPath(filePath);
+            return error ? { success: false, error, path: filePath } : { success: true, path: filePath };
+        } catch (error) {
+            return { success: false, error: error.message };
+        }
+    });
 
     ipcMain.handle('initialize-cloud', async (event, token, profile, userContext) => {
         try {

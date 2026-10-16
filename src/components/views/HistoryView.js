@@ -362,7 +362,9 @@ export class HistoryView extends LitElement {
     getProfileNames() {
         return {
             interview: 'Job Interview',
+            coding: 'Coding Round (DSA)',
             lld: 'LLD Interview (SDE-2)',
+            hld: 'HLD / System Design',
             sales: 'Sales Call',
             meeting: 'Business Meeting',
             presentation: 'Presentation',

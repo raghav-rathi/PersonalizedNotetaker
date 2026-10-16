@@ -4,7 +4,11 @@
 const fs = require('fs');
 const path = require('path');
 
-const CODING_SKILL_PATH = path.join(__dirname, '..', 'prompts', 'dsa-coding-skill.md');
+const { getConfigDir } = require('../storage');
+
+// The round picked in AI Customization decides which prompt runs the hotkey steps. Other profiles keep the DSA round.
+const ROUND_SKILLS = { coding: 'dsa-coding-skill.md', lld: 'lld-skill.md', hld: 'hld-skill.md' };
+const BUILT_IN_SKILL_DIR = path.join(__dirname, '..', 'prompts');
 
 /** Hotkey commands, worded the way the skill expects them. */
 const CODING_COMMANDS = {
@@ -19,11 +23,46 @@ const EXIT_WORDS = /^\s*(?:exit|exit coding(?: mode)?|stop coding|end coding)\s*
 // "new problem", optionally followed by the problem text the user typed or pasted.
 const NEW_PROBLEM_WORDS = /^\s*new problem\b[\s:.,-]*/i;
 
-let skillText = null;
+let loggedSkillPath = '';
 
-function loadCodingSkill() {
-    if (skillText === null) skillText = fs.readFileSync(CODING_SKILL_PATH, 'utf8');
-    return skillText;
+/** @param {string|null|undefined} profile */
+function skillFileName(profile) {
+    return ROUND_SKILLS[/** @type {keyof typeof ROUND_SKILLS} */ (profile)] || ROUND_SKILLS.coding;
+}
+
+/**
+ * Read on every turn, so an edited prompt applies from the next reply. A copy (or symlink) in the
+ * settings folder wins, so the packaged app picks up prompt edits without a rebuild.
+ * @param {string|null|undefined} profile
+ */
+function loadCodingSkill(profile, configDir = getConfigDir()) {
+    const name = skillFileName(profile);
+    let skillPath = path.join(configDir, name);
+    let text;
+    try {
+        text = fs.readFileSync(skillPath, 'utf8');
+    } catch (error) {
+        if (error.code !== 'ENOENT') console.warn(`Could not read ${skillPath} (${error.message}); using the built-in prompt`);
+        skillPath = path.join(BUILT_IN_SKILL_DIR, name);
+        text = fs.readFileSync(skillPath, 'utf8');
+    }
+    if (skillPath !== loggedSkillPath) console.log(`Coding prompt: ${skillPath}`);
+    loggedSkillPath = skillPath;
+    return text;
+}
+
+/**
+ * The round's prompt file in the settings folder, copied from the built-in one the first time, so the user can edit it.
+ * @param {string|null|undefined} profile
+ */
+function ensureUserSkillFile(profile, configDir = getConfigDir()) {
+    const name = skillFileName(profile);
+    const userPath = path.join(configDir, name);
+    if (!fs.existsSync(userPath)) {
+        fs.mkdirSync(configDir, { recursive: true });
+        fs.copyFileSync(path.join(BUILT_IN_SKILL_DIR, name), userPath);
+    }
+    return userPath;
 }
 
 /** @typedef {{role:'user'|'assistant', text:string, imageJpeg?:string|null}} ChatMessage */
@@ -80,4 +119,4 @@ class CodingSession {
     }
 }
 
-module.exports = { CODING_COMMANDS, EXIT_WORDS, NEW_PROBLEM_WORDS, loadCodingSkill, CodingSession };
+module.exports = { CODING_COMMANDS, EXIT_WORDS, NEW_PROBLEM_WORDS, loadCodingSkill, ensureUserSkillFile, CodingSession };

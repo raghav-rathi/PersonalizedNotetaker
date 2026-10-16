@@ -139,6 +139,24 @@ test('Opus goes to Anthropic first at medium effort, and marks the newest coding
     assert.equal(request.messages[1].content[0].prompt_cache_breakpoint, undefined);
 });
 
+test('Sonnet, Haiku and DeepSeek go to their maker first at low effort', () => {
+    for (const [id, provider] of [
+        ['anthropic/claude-sonnet-5.5', 'anthropic'],
+        ['anthropic/claude-haiku-5.5', 'anthropic'],
+        ['deepseek/deepseek-v4.1-flash', 'deepseek'],
+    ]) {
+        const request = buildOpenRouterAnswerRequest({
+            model: answerModelById(id),
+            systemPrompt: 'p',
+            messages: [{ role: 'user', text: 'q' }],
+            maxTokens: 10,
+        });
+        assert.equal(request.model, id);
+        assert.deepEqual(request.provider, { order: [provider] });
+        assert.deepEqual(request.reasoning, { effort: 'low', exclude: true });
+    }
+});
+
 test('a saved model that no longer exists falls back to the first model', () => {
     assert.equal(answerModelById('openai/retired-model'), ANSWER_MODELS[0]);
     assert.equal(answerModelById(undefined), ANSWER_MODELS[0]);

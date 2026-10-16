@@ -39,6 +39,7 @@ export class AICustomizeView extends LitElement {
         selectedProfile: { type: String },
         onProfileChange: { type: Function },
         _context: { state: true },
+        _promptStatus: { state: true },
     };
 
     constructor() {
@@ -46,6 +47,7 @@ export class AICustomizeView extends LitElement {
         this.selectedProfile = 'interview';
         this.onProfileChange = () => {};
         this._context = '';
+        this._promptStatus = '';
         this._loadFromStorage();
     }
 
@@ -68,23 +70,17 @@ export class AICustomizeView extends LitElement {
         await cheatingDaddy.storage.updatePreference('customPrompt', val);
     }
 
-    _getProfileName(profile) {
-        const names = {
-            interview: 'Job Interview',
-            lld: 'LLD Interview (SDE-2)',
-            sales: 'Sales Call',
-            meeting: 'Business Meeting',
-            presentation: 'Presentation',
-            negotiation: 'Negotiation',
-            exam: 'Exam Assistant',
-        };
-        return names[profile] || profile;
+    async _openRoundPrompt() {
+        const result = await window.require('electron').ipcRenderer.invoke('open-round-prompt', this.selectedProfile);
+        this._promptStatus = result.success ? `Opened ${result.path}` : `Could not open the prompt: ${result.error}`;
     }
 
     render() {
         const profiles = [
             { value: 'interview', label: 'Job Interview' },
+            { value: 'coding', label: 'Coding Round (DSA)' },
             { value: 'lld', label: 'LLD Interview (SDE-2)' },
+            { value: 'hld', label: 'HLD / System Design' },
             { value: 'sales', label: 'Sales Call' },
             { value: 'meeting', label: 'Business Meeting' },
             { value: 'presentation', label: 'Presentation' },
@@ -104,9 +100,20 @@ export class AICustomizeView extends LitElement {
                             <div class="form-group">
                                 <label class="form-label">Profile</label>
                                 <select class="control" .value=${this.selectedProfile} @change=${this._handleProfileChange}>
-                                    ${profiles.map(profile => html`<option value=${profile.value}>${profile.label}</option>`)}
+                                    ${profiles.map(profile => html`<option value=${profile.value} ?selected=${profile.value === this.selectedProfile}>${profile.label}</option>`)}
                                 </select>
                             </div>
+                            ${
+                                ['coding', 'lld', 'hld'].includes(this.selectedProfile)
+                                    ? html`<div class="form-group">
+                                              <label class="form-label">Round Prompt</label>
+                                              <button class="control" type="button" @click=${() => this._openRoundPrompt()}>Edit round prompt</button>
+                                          </div>
+                                          <div class="form-help">
+                                              ${this._promptStatus || 'Runs the ⌘⌥1 to ⌘⌥6 steps. Edits apply from the next reply, no rebuild or restart.'}
+                                          </div>`
+                                    : ''
+                            }
                             <div class="form-group vertical">
                                 <label class="form-label">Custom Instructions</label>
                                 <textarea

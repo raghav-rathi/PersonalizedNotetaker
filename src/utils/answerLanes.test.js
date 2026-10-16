@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { parseLaneHeader, splitSideUpdate, splitMainLesson, isReplaceableAnswer, resolveLane, isBackchannel } = require('./answerLanes');
+const { parseLaneHeader, splitSideUpdate, isReplaceableAnswer, resolveLane, isBackchannel } = require('./answerLanes');
 
 test('a streaming reply waits for the whole LANE line, then shows only the answer', () => {
     assert.deepEqual(parseLaneHeader('LA'), { status: 'pending' });
@@ -36,23 +36,6 @@ test('a follow-up answer splits from the changed step at an UPDATE line outside 
         update: ['**Hop 1 of 3: setup (changed)**', '```python', 'x = 1', '```'].join('\n'),
     });
     assert.deepEqual(splitSideUpdate('Just the answer.'), { answer: 'Just the answer.', update: null });
-});
-
-test('a main coding reply splits the lesson at a TEACH line outside code', () => {
-    const body = [
-        '**Part 1: clarify and simple version**',
-        'I check every pair.',
-        '```text',
-        'TEACH:',
-        '```',
-        'TEACH:',
-        'By hand you point at each pair.',
-    ].join('\n');
-    assert.deepEqual(splitMainLesson(body), {
-        answer: ['**Part 1: clarify and simple version**', 'I check every pair.', '```text', 'TEACH:', '```'].join('\n'),
-        lesson: 'By hand you point at each pair.',
-    });
-    assert.deepEqual(splitMainLesson('Just the script.'), { answer: 'Just the script.', lesson: null });
 });
 
 test('new speech may rewrite an answer only until it has been on screen for the grace period', () => {
