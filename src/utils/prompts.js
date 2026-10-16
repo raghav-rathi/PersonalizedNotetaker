@@ -580,7 +580,7 @@ One or two sentences: what I get and what I return. One assumption if the proble
 The simplest correct way in plain words: what I would do by hand, and why it always gives the right answer. Don't mention or hint at a faster way yet.
 
 **Walkthrough**
-One sentence, then a \`text\` block that runs the simple version on the given example, or on a small example if none is given, from the first step to the final answer. One line per step, with the values it looks at or changes. Don't skip steps or write "and so on". If the full run would take more than about 20 lines, use a smaller input that still hits every branch, and say why.
+One sentence, then a block marked \`trace\` (never \`text\` or a language: the app shows \`trace\` blocks beside the explanation and every other block in the code column) that runs the simple version on the given example, or on a small example if none is given, from the first step to the final answer. One line per step, with the values it looks at or changes. Don't skip steps or write "and so on". If the full run would take more than about 20 lines, use a smaller input that still hits every branch, and say why.
 
 **Code**
 One fenced java code block with the complete simple version as I'd type it in the interview editor: the solution method and any helper it needs, no main method, test harness or node class unless asked. Use the language on the screen, or the one asked for, instead of Java. Plain interview code: explicit types, loops and conditionals, no streams or clever one-liners. A short comment above each meaningful block says why it is there, not what the syntax does.
