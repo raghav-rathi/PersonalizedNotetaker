@@ -1,5 +1,5 @@
 const { GoogleGenAI, ThinkingLevel } = require('@google/genai');
-const { BrowserWindow, ipcMain, shell } = require('electron');
+const { BrowserWindow, ipcMain, net, shell } = require('electron');
 const { spawn } = require('child_process');
 const { saveDebugAudio } = require('../audioUtils');
 const { getSystemPrompt, buildMeetingContextBlock, CODING_ANSWER_INSTRUCTION } = require('./prompts');
@@ -515,8 +515,15 @@ let lastCodingCommand = { name: '', at: 0 };
 // in this window gets a screenshot taken when it ends.
 const SCREEN_SHARE_WINDOW_MS = 2 * 60 * 1000;
 let screenShareAt = 0;
-// Counts questions, so a screen decision that arrives after a newer question changes nothing.
-let screenAskSeq = 0;
+// Jev's decision for the question as heard so far, started on each new piece of speech so it is ready
+// when the 400 ms pause ends. Used only if the question that gets answered has exactly this text.
+/** @type {{question:string, abort:AbortController, decision:ReturnType<typeof decideScreen>}|null} */
+let earlyScreenDecision = null;
+// The newest ask of each turn still waiting for Jev. An ask whose question was asked again with more
+// words, or whose session stopped, sends nothing.
+/** @type {Map<string, number>} */
+const waitingAsks = new Map();
+let askSeq = 0;
 // Counts "new problem" requests, so a screenshot that finishes after a newer request or an exit is dropped.
 let codingProblemStart = 0;
 const codingSession = new CodingSession();
@@ -582,6 +589,7 @@ function cancelTextAnswers() {
     lastVoiceQuestion = null;
     liveAnswerFallbackPending = false;
     screenShareAt = 0;
+    waitingAsks.clear();
     codingProblemStart++;
     if (codingSession.active) {
         codingSession.stop();
@@ -603,14 +611,43 @@ function scheduleAnswerForVoiceTurn() {
             if (codingSession.active) codingSession.addTurn({ text: `they said: ${fragment}` }).reply = 'LANE: NONE';
             return;
         }
-        const previous = lastVoiceQuestion;
-        const now = Date.now();
-        const card = previous ? answerCards.get(previous.turnId) : null;
-        // Speech that continues a question may rewrite its answer only until the user starts reading it.
-        const canMerge = !card || isReplaceableAnswer({ text: card.text, firstTextAt: card.firstTextAt, now });
-        lastVoiceQuestion = nextVoiceQuestion(previous, { fragment, turnSeq, now, newTurnId: () => createTurnId('answer'), canMerge });
+        lastVoiceQuestion = upcomingVoiceQuestion(fragment, turnSeq, () => createTurnId('answer'));
         answerSpokenQuestion(questionText(lastVoiceQuestion), lastVoiceQuestion.turnId);
     }, ANSWER_DEBOUNCE_MS);
+    // ponytail: one Jev call per piece of speech (about $0.00002 each); the superseded call is aborted.
+    if (!isBackchannel(fragment)) startEarlyScreenDecision(questionText(upcomingVoiceQuestion(fragment, turnSeq, () => '')));
+}
+
+function upcomingVoiceQuestion(fragment, turnSeq, newTurnId) {
+    const previous = lastVoiceQuestion;
+    const now = Date.now();
+    const card = previous ? answerCards.get(previous.turnId) : null;
+    // Speech that continues a question may rewrite its answer only until the user starts reading it.
+    const canMerge = !card || isReplaceableAnswer({ text: card.text, firstTextAt: card.firstTextAt, now });
+    return nextVoiceQuestion(previous, { fragment, turnSeq, now, newTurnId, canMerge });
+}
+
+function startEarlyScreenDecision(question) {
+    earlyScreenDecision?.abort.abort();
+    earlyScreenDecision = null;
+    if (getPreferences().autoScreenContext === false || !getOpenRouterApiKey()) return;
+    const abort = new AbortController();
+    earlyScreenDecision = { question, abort, decision: screenDecisionFor(question, false, abort.signal) };
+}
+
+function screenDecisionFor(question, typed, signal) {
+    const threshold = SENSITIVITY[getPreferences().screenContextSensitivity] ?? SENSITIVITY.balanced;
+    const recent = recentHeardText().slice(-600);
+    return decideScreen({
+        apiKey: getOpenRouterApiKey(),
+        recent,
+        latest: question,
+        typed,
+        threshold,
+        profile: currentProfile,
+        fetchImpl: net.fetch,
+        signal,
+    });
 }
 
 // A question asked again with more words replaces its own earlier answer and its coding turn. The
@@ -622,10 +659,10 @@ function answerSpokenQuestion(question, turnId) {
         question,
         turnId,
         typed: false,
-        send: imageJpeg =>
+        send: (imageJpeg, depth) =>
             codingSession.active
-                ? sendCodingTurn({ text: `they said: ${question}`, label: question, turnId, imageJpeg })
-                : sendNormalAnswer(question, { turnId, imageJpeg }),
+                ? sendCodingTurn({ text: `they said: ${question}`, label: question, turnId, imageJpeg, depth })
+                : sendNormalAnswer(question, { turnId, imageJpeg, depth }),
     });
 }
 
@@ -641,20 +678,26 @@ function cancelTurn(turnId) {
 }
 
 /**
- * Answers at once, without the screen, while Jev decides in about half a second whether the question
- * needs it. If it does, the same card is answered again with a screenshot taken when the question ended;
- * the text usually hasn't appeared yet, so this costs about half a second. A keyword such as "look at
- * this", or something announced as being shared, attaches the screenshot straight away.
- * @param {{question:string, turnId:string, typed:boolean, send:(imageJpeg:string|null) => unknown}} options
+ * Waits for Jev, which has usually decided while the question was still being spoken (about 100 ms left
+ * when it ends; about 450 ms for a fresh call), then answers once: with a screenshot taken when the
+ * question ended if the answer needs the screen, and quick or after thinking, as Jev chose. A keyword
+ * such as "look at this", or something announced as being shared, attaches the screenshot whatever Jev
+ * says. With Jev switched off in Settings every answer is quick; when Jev fails the model thinks.
+ * @param {{question:string, turnId:string, typed:boolean, send:(imageJpeg:string|null, depth:import('./answerModel').AnswerDepth) => unknown}} options
  */
-function askWithScreenContext({ question, turnId, typed, send }) {
+async function askWithScreenContext({ question, turnId, typed, send }) {
+    const early = earlyScreenDecision;
+    earlyScreenDecision = null;
+    const reused = !typed && early?.question === question;
+    if (early && !reused) early.abort.abort();
     const prefs = getPreferences();
-    const apiKey = getOpenRouterApiKey();
-    if (prefs.autoScreenContext === false || !apiKey) {
-        console.log('[screen] off');
-        return send(lastScreenshotJpeg && needsVisualContext(question) ? lastScreenshotJpeg : null);
+    const lastShot = lastScreenshotJpeg && needsVisualContext(question) ? lastScreenshotJpeg : null;
+    if (prefs.autoScreenContext === false || !getOpenRouterApiKey()) {
+        console.log('[screen] jev off, quick');
+        return send(lastShot, 'quick');
     }
-    const seq = ++screenAskSeq;
+    const seq = ++askSeq;
+    waitingAsks.set(turnId, seq);
     const shot = captureScreenStill({ quality: prefs.selectedImageQuality || 'medium' }).then(result => {
         if (!result.success) {
             console.warn(`[screen] capture failed: ${result.error}`);
@@ -666,27 +709,37 @@ function askWithScreenContext({ question, turnId, typed, send }) {
     // A meeting shares screens all the time and says "can you see my screen?", so there Jev alone decides.
     const meeting = currentProfile === 'meeting';
     const sharing = !meeting && Date.now() - screenShareAt <= SCREEN_SHARE_WINDOW_MS;
-    if (sharing || (!meeting && needsVisualContext(question))) {
-        console.log(`[screen] ${sharing ? 'pending share' : 'keyword'}`);
-        screenShareAt = 0;
-        return shot.then(send);
+    const keyword = !meeting && needsVisualContext(question);
+    if (sharing) screenShareAt = 0;
+    const askedAt = Date.now();
+    // ponytail: waits for Jev up to its 2 s timeout; add a shorter cap if fresh calls show up often in the log.
+    const decision = await (reused ? early.decision : screenDecisionFor(question, typed));
+    const depth = decision?.depth ?? 'think';
+    if (!decision) console.log('[screen] jev unavailable, thinking');
+    else {
+        const think = decision.thinkProbability === null ? '' : ` ${decision.thinkProbability.toFixed(2)}`;
+        console.log(
+            `[screen] jev ${decision.action} ${(decision.probabilities.now ?? 0).toFixed(2)}, ${depth}${think}, ${Date.now() - askedAt} ms after the question${reused ? ' (early)' : ''}`
+        );
+        if (!sharing && announcesShare(decision)) screenShareAt = Date.now();
     }
-    send(null);
-    const threshold = SENSITIVITY[prefs.screenContextSensitivity] ?? SENSITIVITY.balanced;
-    decideScreen({ apiKey, recent: recentHeardText().slice(-600), latest: question, typed, threshold, profile: currentProfile }).then(decision => {
-        if (!decision) return console.log('[screen] jev unavailable');
-        console.log(`[screen] jev ${decision.action} ${(decision.probabilities.now ?? 0).toFixed(2)} in ${decision.ms} ms`);
-        if (announcesShare(decision)) screenShareAt = Date.now();
-        if (decision.action !== 'now' || seq !== screenAskSeq) return;
-        const card = answerCards.get(turnId);
-        if (card && !isReplaceableAnswer({ text: card.text, firstTextAt: card.firstTextAt, now: Date.now() })) return;
-        shot.then(imageJpeg => {
-            if (!imageJpeg || seq !== screenAskSeq) return;
-            // ponytail: a coding reply that already finished as LANE: NONE keeps its turn in the log; rare, harmless.
-            cancelTurn(turnId);
-            send(imageJpeg);
-        });
-    });
+    let imageJpeg = null;
+    if (sharing || keyword || decision?.action === 'now') {
+        if (sharing || keyword) console.log(`[screen] ${sharing ? 'pending share' : 'keyword'}`);
+        imageJpeg = await shot;
+    }
+    if (waitingAsks.get(turnId) !== seq) return;
+    waitingAsks.delete(turnId);
+    return send(imageJpeg, depth);
+}
+
+// Jev through Chromium's network stack shares one HTTP/2 connection with the answer stream and keeps it
+// open longer: 0.49 s instead of 0.83 s on 2026-10-17. The first call of a session took 1.05 s instead of
+// 0.48 s, so one throwaway call at session start pays that before the first question.
+function warmScreenDecision() {
+    const apiKey = getOpenRouterApiKey();
+    if (getPreferences().autoScreenContext === false || !apiKey) return;
+    decideScreen({ apiKey, latest: 'Hello', threshold: 1, fetchImpl: net.fetch, timeoutMs: 5000 });
 }
 
 async function streamGeminiAnswer({ apiKey, systemPrompt, messages, signal, onText }) {
@@ -740,7 +793,8 @@ function shortLabel(text, limit = 70) {
  * Streams one answer and puts it on a screen. The screen comes from the reply's LANE line unless
  * `lane` is given (hotkey commands always belong on the main screen).
  * @param {{question:string, label:string, turnId?:string, lane?:'main'|'side'|null, systemPrompt:string,
- *   messages:import('./answerModel').ChatMessage[], codingTurn?:import('./codingSession').CodingTurn|null}} options
+ *   messages:import('./answerModel').ChatMessage[], codingTurn?:import('./codingSession').CodingTurn|null,
+ *   depth?:import('./answerModel').AnswerDepth}} options
  */
 async function streamLanedAnswer({
     question,
@@ -750,6 +804,7 @@ async function streamLanedAnswer({
     systemPrompt,
     messages,
     codingTurn = null,
+    depth = 'think',
 }) {
     const apiKey = getApiKey();
     if (!apiKey || !question.trim()) return;
@@ -802,7 +857,7 @@ async function streamLanedAnswer({
     };
 
     const gemini = ({ signal, onText }) => streamGeminiAnswer({ apiKey, systemPrompt, messages, signal, onText });
-    sendToRenderer('update-status', 'Answering...');
+    sendToRenderer('update-status', depth === 'think' ? 'Thinking...' : 'Answering...');
     let result = null;
     let failure = null;
     try {
@@ -817,13 +872,14 @@ async function streamLanedAnswer({
                           maxTokens: ANSWER_MAX_OUTPUT_TOKENS,
                           sessionId: answerSessionId,
                           cacheConversation: Boolean(codingTurn),
+                          depth,
                           signal,
                           onText,
                       }),
                   fallback: gemini,
                   signal,
                   onText: show,
-                  firstTextTimeoutMs: answerModel.firstTextMs,
+                  firstTextTimeoutMs: answerModel.firstTextMs[depth],
               })
             : { ...(await gemini({ signal, onText: show })), usedFallback: false };
     } catch (error) {
@@ -862,13 +918,13 @@ async function streamLanedAnswer({
     const model = openRouterKey && !result.usedFallback ? answerModel.id : GEMINI_ANSWER_MODEL;
     const cost = result.cost ? `, $${result.cost.toFixed(4)}` : '';
     console.log(
-        `[answer] ${model} ${codingTurn ? 'coding' : currentProfile || 'interview'} ${lane}: first text ${firstTextAt - startedAt} ms, done ${Date.now() - startedAt} ms${cost}`
+        `[answer] ${model} ${codingTurn ? 'coding' : currentProfile || 'interview'} ${lane} ${depth}: first text ${firstTextAt - startedAt} ms, done ${Date.now() - startedAt} ms${cost}`
     );
     if (!answerRequests.size) sendToRenderer('update-status', codingSession.active ? 'Coding mode' : 'Listening...');
 }
 
-/** @param {string} question @param {{turnId?:string, imageJpeg?:string|null}} [options] */
-function sendNormalAnswer(question, { turnId = createTurnId('answer'), imageJpeg = null } = {}) {
+/** @param {string} question @param {{turnId?:string, imageJpeg?:string|null, depth?:import('./answerModel').AnswerDepth}} [options] */
+function sendNormalAnswer(question, { turnId = createTurnId('answer'), imageJpeg = null, depth = 'think' } = {}) {
     const records = [...conversationHistory, ...screenAnalysisHistory].sort((a, b) => a.timestamp - b.timestamp);
     const context = buildRelevantContext({ query: question, summary: currentSummary, records }).slice(-ANSWER_CONTEXT_CHARS);
     const userText = `${context ? `Conversation so far:\n${context}\n\n` : ''}Main question on screen: ${mainQuestion || 'none yet'}\n\nQuestion:\n${question}`;
@@ -882,11 +938,12 @@ function sendNormalAnswer(question, { turnId = createTurnId('answer'), imageJpeg
                 ? `${getSystemPrompt('meeting', buildMeetingContextBlock(getPreferences()), false)}\n\n${LANE_INSTRUCTION}`
                 : `${currentSystemPrompt || 'You are a helpful assistant.'}\n\n${LANE_INSTRUCTION}\n\n${CODING_ANSWER_INSTRUCTION}`,
         messages: [{ role: 'user', text: userText, imageJpeg }],
+        depth,
     });
 }
 
-/** @param {{text:string, label:string, imageJpeg?:string|null, turnId?:string, lane?:'main'|'side'|null}} turn */
-function sendCodingTurn({ text, label, imageJpeg = null, turnId = createTurnId('code'), lane = null }) {
+/** @param {{text:string, label:string, imageJpeg?:string|null, turnId?:string, lane?:'main'|'side'|null, depth?:import('./answerModel').AnswerDepth}} turn */
+function sendCodingTurn({ text, label, imageJpeg = null, turnId = createTurnId('code'), lane = null, depth = 'think' }) {
     const codingTurn = codingSession.addTurn({ text, imageJpeg });
     return streamLanedAnswer({
         question: label,
@@ -896,6 +953,7 @@ function sendCodingTurn({ text, label, imageJpeg = null, turnId = createTurnId('
         systemPrompt: loadCodingSkill(currentProfile),
         messages: codingSession.messagesThrough(codingTurn),
         codingTurn,
+        depth,
     });
 }
 
@@ -2151,7 +2209,7 @@ async function sendImageToGeminiHttp(base64Data, request) {
                   fallback: gemini,
                   signal: abort.signal,
                   onText: show,
-                  firstTextTimeoutMs: answerModel.firstTextMs,
+                  firstTextTimeoutMs: answerModel.firstTextMs.think,
               })
             : { ...(await gemini({ signal: abort.signal, onText: show })), usedFallback: false };
 
@@ -2237,6 +2295,7 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
 
     ipcMain.handle('initialize-gemini', async (event, apiKey, customPrompt, profile = 'interview', language = 'en-US') => {
         currentProviderMode = 'byok';
+        warmScreenDecision();
 
         // Gemini Live 3.8 conversational path (STT + overlay answer in one session)
         const session = await initializeGeminiSession(apiKey, customPrompt, profile, language);
@@ -2485,10 +2544,10 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
             question: userText,
             turnId,
             typed: true,
-            send: imageJpeg =>
+            send: (imageJpeg, depth) =>
                 codingSession.active
-                    ? sendCodingTurn({ text: `command: ${userText}`, label: userText, turnId, imageJpeg })
-                    : sendNormalAnswer(userText, { turnId, imageJpeg }),
+                    ? sendCodingTurn({ text: `command: ${userText}`, label: userText, turnId, imageJpeg, depth })
+                    : sendNormalAnswer(userText, { turnId, imageJpeg, depth }),
         });
         return { success: true };
     });

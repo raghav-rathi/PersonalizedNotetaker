@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { SENSITIVITY, buildScreenDecisionRequest, screenAction, announcesShare, decideScreen } = require('./screenDecision');
+const { SENSITIVITY, buildScreenDecisionRequest, screenAction, answerDepth, announcesShare, decideScreen } = require('./screenDecision');
 
 test('Jev gets the recent conversation and the latest line as text, and one now/wait/no question', () => {
     const request = buildScreenDecisionRequest({ recent: "they said: I'm sharing a doc.", latest: 'What about section two?' });
@@ -21,10 +21,35 @@ test('the sensitivity decides how sure Jev must be before the screen is attached
 test('a failed or slow decision is null, so the answer goes on without the screen', async () => {
     const options = { apiKey: 'k', latest: 'q', threshold: 0.5 };
     assert.equal(await decideScreen({ ...options, fetchImpl: async () => ({ ok: false }) }), null);
-    const hang = (url, { signal }) => new Promise((resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason)));
+    const hang = (url, { signal }) =>
+        new Promise((resolve, reject) => (signal.aborted ? reject(signal.reason) : signal.addEventListener('abort', () => reject(signal.reason))));
     assert.equal(await decideScreen({ ...options, fetchImpl: hang, timeoutMs: 20 }), null);
+    assert.equal(await decideScreen({ ...options, fetchImpl: hang, signal: AbortSignal.abort() }), null);
     const ok = async () => ({ ok: true, json: async () => ({ answers: { screen: { choice: 'now', probabilities: { now: 0.97 } } } }) });
     assert.equal((await decideScreen({ ...options, fetchImpl: ok })).action, 'now');
+    // Without a depth answer the model thinks, as before Jev chose.
+    assert.equal((await decideScreen({ ...options, fetchImpl: ok })).depth, 'think');
+});
+
+test('the same Jev call decides whether the answer is quick or needs thinking', async () => {
+    assert.deepEqual(Object.keys(buildScreenDecisionRequest({ latest: 'q' }).questions.depth.criteria), ['quick', 'think']);
+    assert.ok(buildScreenDecisionRequest({ latest: 'q', profile: 'meeting' }).questions.depth);
+    assert.equal(answerDepth({ choice: 'quick', probabilities: { quick: 0.99, think: 0.01 } }), 'quick');
+    assert.equal(answerDepth({ choice: 'think', probabilities: { quick: 0.02, think: 0.98 } }), 'think');
+    assert.equal(answerDepth({ choice: 'quick' }), 'quick');
+    assert.equal(answerDepth(undefined), 'think');
+    const answers = {
+        screen: { choice: 'no', probabilities: { now: 0.01 } },
+        depth: { choice: 'think', probabilities: { quick: 0.01, think: 0.99 } },
+    };
+    const decision = await decideScreen({
+        apiKey: 'k',
+        latest: 'You are wrong.',
+        threshold: 0.5,
+        fetchImpl: async () => ({ ok: true, json: async () => ({ answers }) }),
+    });
+    assert.equal(decision.depth, 'think');
+    assert.equal(decision.thinkProbability, 0.99);
 });
 
 test('a line that announces sharing counts as sharing even when Jev leans to "now"', () => {

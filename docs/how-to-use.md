@@ -60,7 +60,9 @@ For every question, spoken or typed, in every profile, the app checks whether th
 - **Something is being shared** ("I'm sharing a doc, open it"): nothing is shown. The next question in the following 2 minutes gets a screenshot taken when that question ends, so it sees the opened doc.
 - **Doesn't need it:** answered as usual. Nothing is sent.
 
-Answers that were sent your screen are marked **📷**. Turn it off, or change how often it attaches the screen, in **Settings → Screen Context**. It needs the OpenRouter key. Without the key, or with it switched off, only questions with words like "look at this" use the screen.
+The same Jev call also decides how hard the answer model thinks. Small talk, behavioral questions and follow-ups get a quick answer (Claude Haiku in about 1 s). A new problem, a request for code, a dry run, a changed constraint or "that's wrong" gets the model's full thinking (GPT-6 Astra at medium, about 11 s on a new DSA problem). Coding hotkeys always think.
+
+Answers that were sent your screen are marked **📷**. Turn it off, or change how often it attaches the screen, in **Settings → Screen Context**. It needs the OpenRouter key. Without the key, or with it switched off, Jev isn't asked: every spoken or typed answer is quick, and only questions with words like "look at this" use the screen.
 
 ## Normal questions
 

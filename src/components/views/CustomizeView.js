@@ -699,7 +699,8 @@ export class CustomizeView extends LitElement {
                         </select>
                     </div>
                     <div class="form-help">
-                        Jev decides from the words of each question. Your screen is sent only with answers marked 📷. Needs the OpenRouter key.
+                        Jev decides from the words of each question whether to attach your screen and whether the answer model should think first.
+                        Your screen is sent only with answers marked 📷. Off: no screen, and every answer is quick. Needs the OpenRouter key.
                     </div>
                 </div>
             </section>

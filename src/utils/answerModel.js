@@ -4,20 +4,62 @@
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 // The start screen lists these. Each provider keeps its own prompt cache, so a model goes to its maker's
 // servers first, and the other providers OpenRouter has for it serve only as fallbacks.
+// Jev picks a depth per question (screenDecision.js): 'quick' for small talk and follow-ups, 'think' for a
+// new problem, code, or an answer called wrong. Hotkeys and screen analysis always think.
+// Measured on 2026-10-17 with the DSA coding prompt:
+// - Haiku thinks 1,450-2,250 tokens at low, so its first text took 9-13 s; with reasoning off, 0.8-0.9 s.
+// - Astra, Sol, Sonnet and Opus refuse reasoning off ("Reasoning is mandatory"). Astra at low thinks
+//   0-130 tokens and starts a follow-up in 1.4-2.8 s (minimal was no faster); at medium a new DSA problem
+//   started after 11.4 s. Opus starts a follow-up in 2.7 s at low against 5.0 s at medium. Sonnet took
+//   4.4-5.4 s at both minimal and low, so it has no faster setting.
 // firstTextMs is how long the model may take to show its first text before Gemini answers instead.
-// Astra and Sol start in 1-3 s. Opus at medium effort thinks first: in a 2026-10-09 test of 16 interview
-// answers its first text came after a median 5.2 s and at most 13.8 s.
-// Sonnet and Haiku sometimes think first: on 2026-10-16 a follow-up or a screenshot problem took them 6 to 12 s to start,
-// against about 1.7 s on a main step.
 const ANSWER_MODELS = [
-    { id: 'openai/gpt-6-astra', label: 'GPT-6 Astra', effort: 'low', provider: 'openai', firstTextMs: 8000 },
-    { id: 'anthropic/claude-opus-5.5', label: 'Claude Opus 5.5', effort: 'medium', provider: 'anthropic', firstTextMs: 20000 },
-    { id: 'anthropic/claude-sonnet-5.5', label: 'Claude Sonnet 5.5', effort: 'low', provider: 'anthropic', firstTextMs: 15000 },
-    { id: 'openai/gpt-6.1-sol', label: 'GPT-6.1 Sol', effort: 'low', provider: 'openai', firstTextMs: 8000 },
+    {
+        id: 'openai/gpt-6-astra',
+        label: 'GPT-6 Astra',
+        provider: 'openai',
+        reasoning: { quick: { effort: 'low' }, think: { effort: 'medium' } },
+        firstTextMs: { quick: 8000, think: 20000 },
+    },
+    {
+        id: 'anthropic/claude-opus-5.5',
+        label: 'Claude Opus 5.5',
+        provider: 'anthropic',
+        reasoning: { quick: { effort: 'low' }, think: { effort: 'medium' } },
+        firstTextMs: { quick: 8000, think: 20000 },
+    },
+    {
+        id: 'anthropic/claude-sonnet-5.5',
+        label: 'Claude Sonnet 5.5',
+        provider: 'anthropic',
+        reasoning: { quick: { effort: 'low' }, think: { effort: 'low' } },
+        firstTextMs: { quick: 15000, think: 15000 },
+    },
+    {
+        id: 'openai/gpt-6.1-sol',
+        label: 'GPT-6.1 Sol',
+        provider: 'openai',
+        reasoning: { quick: { effort: 'low' }, think: { effort: 'low' } },
+        firstTextMs: { quick: 8000, think: 8000 },
+    },
     // DeepSeek's best (V4 Pro) can't read screenshots, so the Flash model, which can.
-    { id: 'deepseek/deepseek-v4.1-flash', label: 'DeepSeek V4.1 Flash (very cheap)', effort: 'low', provider: 'deepseek', firstTextMs: 8000 },
-    { id: 'anthropic/claude-haiku-5.5', label: 'Claude Haiku 5.5 (cheapest, for testing)', effort: 'low', provider: 'anthropic', firstTextMs: 15000 },
+    {
+        id: 'deepseek/deepseek-v4.1-flash',
+        label: 'DeepSeek V4.1 Flash (very cheap)',
+        provider: 'deepseek',
+        reasoning: { quick: { enabled: false }, think: { effort: 'low' } },
+        firstTextMs: { quick: 8000, think: 8000 },
+    },
+    {
+        id: 'anthropic/claude-haiku-5.5',
+        label: 'Claude Haiku 5.5 (cheapest, for testing)',
+        provider: 'anthropic',
+        reasoning: { quick: { enabled: false }, think: { effort: 'low' } },
+        firstTextMs: { quick: 8000, think: 15000 },
+    },
 ];
+
+/** @typedef {'quick'|'think'} AnswerDepth */
 
 /** @typedef {typeof ANSWER_MODELS[number]} AnswerModel */
 /** @typedef {{text: string, cost?: number}} AnswerResult */
@@ -40,9 +82,9 @@ function openRouterContent(message, cacheMark) {
 }
 
 /**
- * @param {{model: AnswerModel, systemPrompt: string, messages: ChatMessage[], maxTokens: number, sessionId?: string, cacheConversation?: boolean}} request
+ * @param {{model: AnswerModel, systemPrompt: string, messages: ChatMessage[], maxTokens: number, sessionId?: string, cacheConversation?: boolean, depth?: AnswerDepth}} request
  */
-function buildOpenRouterAnswerRequest({ model, systemPrompt, messages, maxTokens, sessionId = '', cacheConversation = false }) {
+function buildOpenRouterAnswerRequest({ model, systemPrompt, messages, maxTokens, sessionId = '', cacheConversation = false, depth = 'think' }) {
     // OpenAI caches a growing conversation on its own; Anthropic only caches up to a marked block, so the
     // newest message carries the mark and Anthropic finds the earlier turns' cache from there.
     const markNewest = cacheConversation && model.provider === 'anthropic';
@@ -51,7 +93,7 @@ function buildOpenRouterAnswerRequest({ model, systemPrompt, messages, maxTokens
         model: model.id,
         stream: true,
         max_tokens: maxTokens,
-        reasoning: { effort: model.effort, exclude: true },
+        reasoning: { ...model.reasoning[depth], exclude: true },
         usage: { include: true },
         provider: { order: [model.provider] },
         ...(sessionId ? { session_id: sessionId } : {}),
@@ -108,7 +150,7 @@ function createSseParser(onEvent) {
 
 /**
  * @param {{apiKey: string, model: AnswerModel, systemPrompt: string, messages: ChatMessage[], maxTokens: number, sessionId?: string,
- *   cacheConversation?: boolean, signal: AbortSignal, onText: (text: string) => void, fetchImpl?: typeof fetch}} options
+ *   cacheConversation?: boolean, depth?: AnswerDepth, signal: AbortSignal, onText: (text: string) => void, fetchImpl?: typeof fetch}} options
  * @returns {Promise<AnswerResult>}
  */
 async function streamOpenRouterAnswer({
@@ -119,6 +161,7 @@ async function streamOpenRouterAnswer({
     maxTokens,
     sessionId = '',
     cacheConversation = false,
+    depth = 'think',
     signal,
     onText,
     fetchImpl = fetch,
@@ -126,7 +169,7 @@ async function streamOpenRouterAnswer({
     const response = await fetchImpl(OPENROUTER_URL, {
         method: 'POST',
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(buildOpenRouterAnswerRequest({ model, systemPrompt, messages, maxTokens, sessionId, cacheConversation })),
+        body: JSON.stringify(buildOpenRouterAnswerRequest({ model, systemPrompt, messages, maxTokens, sessionId, cacheConversation, depth })),
         signal,
     });
     if (!response.ok) {

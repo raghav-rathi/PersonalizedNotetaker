@@ -2,6 +2,8 @@
 // through OpenRouter's Decisions API) reads the recent conversation as text and returns probabilities
 // for "now", "wait" and "no" in about half a second, for about $0.00002. Text only: an image would put
 // Jev in its slower, less accurate long-context mode.
+// The same call also decides how hard the answer model thinks (DEPTH_QUESTION); on 2026-10-17 it sorted
+// 16 of 16 interview lines right and added about 12 ms.
 const DECISIONS_URL = 'https://openrouter.ai/api/alpha/decisions';
 const JEV_MODEL = 'typesafe/jev-1.14';
 // How sure Jev must be that the screen is needed, per the Settings choice.
@@ -33,13 +35,23 @@ const MEETING_SCREEN_QUESTION = {
     },
 };
 
+const DEPTH_QUESTION = {
+    type: 'choice',
+    instructions:
+        'The user is in a live interview and reads answers from an overlay. Decide whether the answer to the latest line can be written at once, or needs the model to think it through first.',
+    criteria: {
+        quick: 'Small talk, a behavioral or experience question, a definition, a clarification, or a follow-up about an approach already explained (its complexity, why a data structure was chosen, what a line does).',
+        think: 'A new coding, DSA or design problem; writing, fixing or optimizing code; a dry run, a tricky edge case or a changed constraint (much larger input, negatives, duplicates); or the interviewer says the earlier answer is wrong, has a bug, fails a case or can be better.',
+    },
+};
+
 /** @param {{recent?:string, latest:string, typed?:boolean, profile?:string|null}} input */
 function buildScreenDecisionRequest({ recent = '', latest, typed = false, profile = null }) {
     const who = typed ? 'Latest line typed by the user' : 'Latest line from the other person';
     return {
         model: JEV_MODEL,
         state: `${recent.trim() ? `Earlier: ${recent.trim()}\n` : ''}${who}: ${latest}`,
-        questions: { screen: profile === 'meeting' ? MEETING_SCREEN_QUESTION : SCREEN_QUESTION },
+        questions: { screen: profile === 'meeting' ? MEETING_SCREEN_QUESTION : SCREEN_QUESTION, depth: DEPTH_QUESTION },
     };
 }
 
@@ -53,33 +65,51 @@ function screenAction(answer, threshold) {
     return answer.choice === 'wait' ? 'wait' : 'no';
 }
 
+/**
+ * A missing or failed depth answer thinks, as every answer did before Jev chose.
+ * @param {{choice?:string, probabilities?:Record<string, number>}|undefined} answer
+ * @returns {'quick'|'think'}
+ */
+function answerDepth(answer) {
+    const think = answer?.probabilities?.think;
+    if (think !== undefined) return think >= 0.5 ? 'think' : 'quick';
+    return answer?.choice === 'quick' ? 'quick' : 'think';
+}
+
 /** Whether the line says something is being shared, so the next question should see the screen too. */
 function announcesShare(decision) {
     return decision.action === 'wait' || (decision.probabilities.wait ?? 0) >= SHARE_HINT;
 }
 
 /**
- * @param {{apiKey:string, recent?:string, latest:string, typed?:boolean, profile?:string|null, threshold:number, fetchImpl?:typeof fetch, timeoutMs?:number}} options
- * @returns {Promise<{action:'now'|'wait'|'no', probabilities:Record<string, number>, ms:number} | null>} null when Jev fails or is too slow
+ * @param {{apiKey:string, recent?:string, latest:string, typed?:boolean, profile?:string|null, threshold:number, fetchImpl?:typeof fetch, timeoutMs?:number, signal?:AbortSignal}} options
+ * @returns {Promise<{action:'now'|'wait'|'no', probabilities:Record<string, number>, depth:'quick'|'think', thinkProbability:number|null, ms:number} | null>} null when Jev fails, is too slow or is aborted
  */
 // In the app Jev answered in 0.6 to 1.1 s on 2026-10-16, so 2 s leaves room without holding anything up:
 // the answer is already running while Jev decides.
-async function decideScreen({ apiKey, recent, latest, typed, profile, threshold, fetchImpl = fetch, timeoutMs = 2000 }) {
+async function decideScreen({ apiKey, recent, latest, typed, profile, threshold, fetchImpl = fetch, timeoutMs = 2000, signal }) {
     const startedAt = Date.now();
     try {
         const response = await fetchImpl(DECISIONS_URL, {
             method: 'POST',
             headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
             body: JSON.stringify(buildScreenDecisionRequest({ recent, latest, typed, profile })),
-            signal: AbortSignal.timeout(timeoutMs),
+            signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
         });
         if (!response.ok) return null;
-        const answer = (await response.json())?.answers?.screen;
+        const answers = (await response.json())?.answers;
+        const answer = answers?.screen;
         if (!answer?.choice) return null;
-        return { action: screenAction(answer, threshold), probabilities: answer.probabilities || {}, ms: Date.now() - startedAt };
+        return {
+            action: screenAction(answer, threshold),
+            probabilities: answer.probabilities || {},
+            depth: answerDepth(answers.depth),
+            thinkProbability: answers.depth?.probabilities?.think ?? null,
+            ms: Date.now() - startedAt,
+        };
     } catch {
         return null;
     }
 }
 
-module.exports = { SENSITIVITY, buildScreenDecisionRequest, screenAction, announcesShare, decideScreen };
+module.exports = { SENSITIVITY, buildScreenDecisionRequest, screenAction, answerDepth, announcesShare, decideScreen };

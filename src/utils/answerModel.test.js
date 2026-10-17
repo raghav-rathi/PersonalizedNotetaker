@@ -139,6 +139,19 @@ test('Opus goes to Anthropic first at medium effort, and marks the newest coding
     assert.equal(request.messages[1].content[0].prompt_cache_breakpoint, undefined);
 });
 
+test("Jev's depth picks the reasoning: thinking off or low for a quick answer, the full setting to think", () => {
+    const messages = [{ role: 'user', text: 'q' }];
+    const reasoning = (id, depth) =>
+        buildOpenRouterAnswerRequest({ model: answerModelById(id), systemPrompt: 'p', messages, maxTokens: 10, depth }).reasoning;
+    assert.deepEqual(reasoning('anthropic/claude-haiku-5.5', 'quick'), { enabled: false, exclude: true });
+    assert.deepEqual(reasoning('anthropic/claude-haiku-5.5', 'think'), { effort: 'low', exclude: true });
+    // Astra can't turn reasoning off, so quick stays at low and thinking goes up to medium.
+    assert.deepEqual(reasoning('openai/gpt-6-astra', 'quick'), { effort: 'low', exclude: true });
+    assert.deepEqual(reasoning('openai/gpt-6-astra', 'think'), { effort: 'medium', exclude: true });
+    assert.deepEqual(reasoning('openai/gpt-6-astra', undefined), { effort: 'medium', exclude: true });
+    for (const model of ANSWER_MODELS) assert.ok(model.firstTextMs.think >= model.firstTextMs.quick, model.id);
+});
+
 test('Sonnet, Haiku and DeepSeek go to their maker first at low effort', () => {
     for (const [id, provider] of [
         ['anthropic/claude-sonnet-5.5', 'anthropic'],
@@ -192,7 +205,7 @@ test('Gemini answers when Astra fails before showing any text', async () => {
         },
         signal: new AbortController().signal,
         onText: text => shown.push(text),
-        firstTextTimeoutMs: astra.firstTextMs,
+        firstTextTimeoutMs: astra.firstTextMs.quick,
     });
     assert.equal(result.text, 'Gemini answer');
     assert.equal(result.usedFallback, true);
@@ -214,7 +227,7 @@ test('a failure after text is already on screen keeps that answer instead of swi
             },
             signal: new AbortController().signal,
             onText: () => {},
-            firstTextTimeoutMs: astra.firstTextMs,
+            firstTextTimeoutMs: astra.firstTextMs.quick,
         }),
         /connection reset/
     );
@@ -247,7 +260,7 @@ test('an empty answer from the primary falls back to Gemini', async () => {
         fallback: async () => ({ text: 'Gemini answer' }),
         signal: new AbortController().signal,
         onText: () => {},
-        firstTextTimeoutMs: astra.firstTextMs,
+        firstTextTimeoutMs: astra.firstTextMs.quick,
     });
     assert.equal(result.text, 'Gemini answer');
     assert.equal(result.primaryError.message, 'empty answer');
@@ -264,7 +277,7 @@ test('an answer cancelled by a newer question never falls back', async () => {
         },
         signal: cancel.signal,
         onText: () => {},
-        firstTextTimeoutMs: astra.firstTextMs,
+        firstTextTimeoutMs: astra.firstTextMs.quick,
     });
     cancel.abort();
     await assert.rejects(pending);
