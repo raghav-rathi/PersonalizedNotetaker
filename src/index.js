@@ -2,7 +2,7 @@ if (require('electron-squirrel-startup')) {
     process.exit(0);
 }
 
-const { app, BrowserWindow, shell, ipcMain, Tray, Menu, dialog } = require('electron');
+const { app, BrowserWindow, shell, ipcMain, Tray, Menu } = require('electron');
 const path = require('node:path');
 
 // Electron 29.1+ ScreenCaptureKit thumbnails are empty on macOS. Disable that path
@@ -36,6 +36,15 @@ const { setupGeminiIpcHandlers, stopMacOSAudioCapture, sendToRenderer } = requir
 const storage = require('./storage');
 const { startDiagnostics } = require('./utils/diagnostics');
 
+// Electron's default for an uncaught error is a modal error box: a window that screen sharing shows and that
+// blocks the app until it is dismissed. The error goes to the log and the status bar instead.
+process.on('uncaughtException', error => {
+    console.error('Uncaught error in the main process:', error);
+    try {
+        sendToRenderer('update-status', `Error: ${error.message}`);
+    } catch {}
+});
+
 const geminiSessionRef = { current: null };
 let mainWindow = null;
 let tray = null;
@@ -57,7 +66,8 @@ function createTray() {
     if (tray) return;
     const icon = path.join(__dirname, 'assets', process.platform === 'win32' ? 'logo.ico' : 'logo.png');
     tray = new Tray(icon);
-    tray.setToolTip('Cheating Daddy');
+    // The tooltip shows in a screen share when the pointer rests on the icon, so it carries the product name.
+    tray.setToolTip(app.getName());
     tray.setContextMenu(
         Menu.buildFromTemplate([
             { label: 'Show', click: showMainWindow },
@@ -72,6 +82,8 @@ function createTray() {
     tray.on('double-click', showMainWindow);
 }
 
+// A dialog would be a window of its own, which screen sharing shows, so the window reloads by itself. Until the
+// reloaded page reports ready, another failure is left alone, so a page that can't load doesn't reload forever.
 function recoverFromRendererFailure(reason) {
     if (recoveringRenderer) return;
     recoveringRenderer = true;
@@ -80,22 +92,14 @@ function recoverFromRendererFailure(reason) {
         geminiSessionRef.current?.close?.();
     } catch (_) {}
     geminiSessionRef.current = null;
-    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isCrashed()) {
+    console.error(`The meeting window stopped responding, so capture stopped and the window reloads. ${reason}`);
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (!mainWindow.webContents.isCrashed()) {
         mainWindow.webContents.send('stop-meeting-requested');
         mainWindow.webContents.forcefullyCrashRenderer();
     }
-    dialog.showMessageBox({
-        type: 'error',
-        title: 'The meeting window stopped responding',
-        message: `Capture was stopped to protect your privacy. ${reason}`,
-        buttons: ['Reload window', 'Quit'],
-    }).then(({ response }) => {
-        if (response === 0 && mainWindow && !mainWindow.isDestroyed()) {
-            recoveringRenderer = false;
-            mainWindow.reload();
-        }
-        else if (response === 1) app.quit();
-    });
+    // Right after forcefullyCrashRenderer, reload starts a new renderer process.
+    mainWindow.reload();
 }
 
 function createMainWindow() {
@@ -370,7 +374,9 @@ function setupStorageIpcHandlers() {
 
 function setupGeneralIpcHandlers() {
     ipcMain.on('renderer-ready', event => {
-        if (mainWindow && event.sender === mainWindow.webContents) rendererReady = true;
+        if (!mainWindow || event.sender !== mainWindow.webContents) return;
+        rendererReady = true;
+        recoveringRenderer = false;
     });
     ipcMain.handle('get-app-version', async () => {
         return app.getVersion();
