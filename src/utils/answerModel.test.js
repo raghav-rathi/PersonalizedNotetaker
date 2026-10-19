@@ -123,7 +123,7 @@ test('only a coding conversation is cached past the system prompt', () => {
     assert.equal(coding.prompt_cache_options, undefined);
 });
 
-test('Opus goes to Anthropic first at medium effort, and marks the newest coding turn so the conversation is cached', () => {
+test('Opus goes to Anthropic first, and marks the newest coding turn so the conversation is cached', () => {
     const messages = [
         { role: 'user', text: 'NEW PROBLEM', imageJpeg: 'AAAA' },
         { role: 'assistant', text: 'LANE: MAIN\nPart 1' },
@@ -132,27 +132,45 @@ test('Opus goes to Anthropic first at medium effort, and marks the newest coding
     const request = buildOpenRouterAnswerRequest({ model: opus, systemPrompt: 'skill', messages, maxTokens: 100, cacheConversation: true });
     assert.equal(request.model, 'anthropic/claude-opus-5.5');
     assert.deepEqual(request.provider, { order: ['anthropic'] });
-    assert.deepEqual(request.reasoning, { effort: 'medium', exclude: true });
     assert.deepEqual(request.messages[3].content, [{ type: 'text', text: 'command: part two', prompt_cache_breakpoint: { mode: 'explicit' } }]);
     // Earlier turns go out unmarked, so their text matches what was cached on the turn before.
     assert.equal(request.messages[2].content, 'LANE: MAIN\nPart 1');
     assert.equal(request.messages[1].content[0].prompt_cache_breakpoint, undefined);
 });
 
-test("Jev's depth picks the reasoning: thinking off or low for a quick answer, the full setting to think", () => {
+test("a quick answer keeps the model's own setting, and thinking uses the effort picked on the start screen", () => {
     const messages = [{ role: 'user', text: 'q' }];
-    const reasoning = (id, depth) =>
-        buildOpenRouterAnswerRequest({ model: answerModelById(id), systemPrompt: 'p', messages, maxTokens: 10, depth }).reasoning;
-    assert.deepEqual(reasoning('anthropic/claude-haiku-5.5', 'quick'), { enabled: false, exclude: true });
-    assert.deepEqual(reasoning('anthropic/claude-haiku-5.5', 'think'), { effort: 'low', exclude: true });
-    // Astra can't turn reasoning off, so quick stays at low and thinking goes up to medium.
-    assert.deepEqual(reasoning('openai/gpt-6-astra', 'quick'), { effort: 'low', exclude: true });
-    assert.deepEqual(reasoning('openai/gpt-6-astra', 'think'), { effort: 'medium', exclude: true });
-    assert.deepEqual(reasoning('openai/gpt-6-astra', undefined), { effort: 'medium', exclude: true });
-    for (const model of ANSWER_MODELS) assert.ok(model.firstTextMs.think >= model.firstTextMs.quick, model.id);
+    const reasoning = (id, effort, depth) =>
+        buildOpenRouterAnswerRequest({ model: answerModelById(id, effort), systemPrompt: 'p', messages, maxTokens: 10, depth }).reasoning;
+    for (const effort of ['low', 'medium', 'high']) {
+        assert.deepEqual(reasoning('anthropic/claude-haiku-5.5', effort, 'quick'), { enabled: false, exclude: true });
+        // Astra can't turn reasoning off, so its quick answers stay at low.
+        assert.deepEqual(reasoning('openai/gpt-6-astra', effort, 'quick'), { effort: 'low', exclude: true });
+        assert.deepEqual(reasoning('anthropic/claude-haiku-5.5', effort, 'think'), { effort, exclude: true });
+        assert.deepEqual(reasoning('openai/gpt-6-astra', effort, undefined), { effort, exclude: true });
+    }
+    // Nothing picked yet, or a value this version doesn't know, thinks at low.
+    assert.deepEqual(reasoning('openai/gpt-6-astra', undefined, 'think'), { effort: 'low', exclude: true });
+    assert.deepEqual(reasoning('openai/gpt-6-astra', 'extreme', 'think'), { effort: 'low', exclude: true });
 });
 
-test('Sonnet, Haiku and DeepSeek go to their maker first at low effort', () => {
+test('high effort leaves the answer room after the thinking, and more effort never waits less for the first text', () => {
+    const opusAtHigh = answerModelById('anthropic/claude-opus-5.5', 'high');
+    const { max_tokens } = buildOpenRouterAnswerRequest({
+        model: opusAtHigh,
+        systemPrompt: 'p',
+        messages: [{ role: 'user', text: 'q' }],
+        maxTokens: 8192,
+    });
+    // OpenRouter gives an Anthropic model 80% of max_tokens to think at high.
+    assert.ok(max_tokens * 0.2 >= 4096, String(max_tokens));
+    for (const model of ANSWER_MODELS) {
+        const [low, medium, high] = ['low', 'medium', 'high'].map(effort => answerModelById(model.id, effort).firstTextMs);
+        assert.ok(low.think >= low.quick && low.think <= medium.think && medium.think <= high.think, model.id);
+    }
+});
+
+test('Sonnet, Haiku and DeepSeek go to their maker first', () => {
     for (const [id, provider] of [
         ['anthropic/claude-sonnet-5.5', 'anthropic'],
         ['anthropic/claude-haiku-5.5', 'anthropic'],
@@ -166,13 +184,12 @@ test('Sonnet, Haiku and DeepSeek go to their maker first at low effort', () => {
         });
         assert.equal(request.model, id);
         assert.deepEqual(request.provider, { order: [provider] });
-        assert.deepEqual(request.reasoning, { effort: 'low', exclude: true });
     }
 });
 
 test('a saved model that no longer exists falls back to the first model', () => {
-    assert.equal(answerModelById('openai/retired-model'), ANSWER_MODELS[0]);
-    assert.equal(answerModelById(undefined), ANSWER_MODELS[0]);
+    assert.equal(answerModelById('openai/retired-model').id, ANSWER_MODELS[0].id);
+    assert.equal(answerModelById(undefined).id, ANSWER_MODELS[0].id);
 });
 
 test('the Gemini fallback gets the same conversation, with assistant turns as model turns', () => {

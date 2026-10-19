@@ -330,8 +330,9 @@ function buildContextMessage() {
 function initializeNewSession(profile = null, customPrompt = null) {
     currentSessionId = Date.now().toString();
     answerSessionId = `cheating-daddy-${currentSessionId}`;
-    // The start screen's model choice applies from the next session.
-    answerModel = answerModelById(getPreferences().answerModel);
+    // The start screen's model and thinking choices apply from the next session.
+    const prefs = getPreferences();
+    answerModel = answerModelById(prefs.answerModel, prefs.reasoningEffort);
     cancelTextAnswers();
     conversationSequence = 0;
     screenSequence = 0;
@@ -352,7 +353,16 @@ function initializeNewSession(profile = null, customPrompt = null) {
         profile,
         customPrompt: customPrompt || '',
     }).catch(error => sendToRenderer('update-status', `History error: ${error.message}`));
-    console.log('New conversation session started:', currentSessionId, 'profile:', profile, 'answer model:', answerModel.id);
+    console.log(
+        'New conversation session started:',
+        currentSessionId,
+        'profile:',
+        profile,
+        'answer model:',
+        answerModel.id,
+        'thinking:',
+        answerModel.reasoning.think.effort
+    );
 }
 
 function saveConversationTurn(transcription, aiResponse) {

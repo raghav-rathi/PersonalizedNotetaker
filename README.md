@@ -45,11 +45,11 @@ For a step-by-step guide to using the app in an interview, including a coding ro
 
 Gemini Live (`gemini-3.8-live`) only listens and transcribes. Every question, spoken or typed, is answered by a text model, so answers are full written text rather than a transcript of Live's short spoken reply:
 
-- With an **OpenRouter API key** on the main screen, the model picked under **Answer Model** writes the answers. A change applies from the next session.
-    - **GPT-6 Astra** (`openai/gpt-6-astra`, low reasoning effort, the default). In blind tests it gave clearly better technical answers than Gemini Flash. Its first words show after about 1.4 seconds, and an answer costs about 2.5 cents.
-    - **Claude Opus 5.5** (`anthropic/claude-opus-5.5`, medium reasoning effort). It thinks before it writes, so its first words show after about 5 seconds, and slow ones take up to 14 to 21 seconds. An answer costs about 1.5 cents.
-    - **GPT-6.1 Sol** (`openai/gpt-6.1-sol`, low reasoning effort), the cheapest, for testing.
-- Without that key, or when the OpenRouter request fails or shows no text in time (8 seconds, or 20 for Opus), `gemini-3.8-flash` answers instead.
+- With an **OpenRouter API key** on the main screen, the model picked under **Answer Model** writes the answers. **Thinking**, under it, sets how hard the model thinks on a new problem, code, a dry run and the coding hotkeys: Low (the default), Medium or High. Small talk and follow-ups stay quick. Both apply from the next session.
+    - **GPT-6 Astra** (`openai/gpt-6-astra`, the default). In blind tests it gave clearly better technical answers than Gemini Flash. At Low its first words show after about 1.4 seconds, and an answer costs about 2.5 cents.
+    - **Claude Opus 5.5** (`anthropic/claude-opus-5.5`). At Medium its first words show after about 5 seconds, and slow ones take up to 14 to 21 seconds. An answer costs about 1.5 cents.
+    - **GPT-6.1 Sol** (`openai/gpt-6.1-sol`). The start screen also lists Claude Sonnet 5.5, DeepSeek V4.1 Flash and Claude Haiku 5.5, the cheapest, for testing ([docs/how-to-use.md](docs/how-to-use.md#which-answer-model)).
+- Without that key, or when the OpenRouter request fails or shows no text in time (8 to 20 seconds depending on the model, and at least 30 at Medium and 60 at High), `gemini-3.8-flash` answers instead.
 
 Live's own reply stays hidden unless both fail. If the interviewer pauses mid-question, speech that arrives within 12 seconds is treated as the same question, but only while its answer is still empty or less than 5 seconds old. After that, new speech is a new question, so the answer you are reading never changes under you.
 

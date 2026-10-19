@@ -60,7 +60,7 @@ For every question, spoken or typed, in every profile, the app checks whether th
 - **Something is being shared** ("I'm sharing a doc, open it"): nothing is shown. The next question in the following 2 minutes gets a screenshot taken when that question ends, so it sees the opened doc.
 - **Doesn't need it:** answered as usual. Nothing is sent.
 
-The same Jev call also decides how hard the answer model thinks. Small talk, behavioral questions and follow-ups get a quick answer (Claude Haiku in about 1 s). A new problem, a request for code, a dry run, a changed constraint or "that's wrong" gets the model's full thinking (GPT-6 Astra at medium, about 11 s on a new DSA problem). Coding hotkeys always think.
+The same Jev call also decides whether the answer model thinks. Small talk, behavioral questions and follow-ups get a quick answer (Claude Haiku in about 1 s). A new problem, a request for code, a dry run, a changed constraint or "that's wrong" gets a thinking answer, at the level you pick under **Thinking** on the start screen (see "Which answer model" below). Coding hotkeys always think.
 
 Answers that were sent your screen are marked **📷**. Turn it off, or change how often it attaches the screen, in **Settings → Screen Context**. It needs the OpenRouter key. Without the key, or with it switched off, Jev isn't asked: every spoken or typed answer is quick, and only questions with words like "look at this" use the screen.
 
@@ -117,6 +117,8 @@ In **AI Customization**, with a round profile picked, press **Edit round prompt*
 ## Which answer model
 
 You pick it on the start screen under **Answer Model**. The choice applies from the next session.
+
+Under it, **Thinking** sets how hard the model thinks on a thinking answer: **Low** (the default), **Medium** or **High**. Higher can give a deeper answer but starts later: GPT-6 Astra took about 11 s to start a new DSA problem at Medium, against about 2 to 3 s at Low. High hasn't been timed. Quick answers stay quick at every level. If the model shows nothing for 30 s at Medium or 60 s at High, Gemini Flash answers instead. The choice applies from the next session.
 
 | Model                 | First words appear              | Cost per answer    | Notes                                                              |
 | --------------------- | ------------------------------- | ------------------ | ------------------------------------------------------------------ |

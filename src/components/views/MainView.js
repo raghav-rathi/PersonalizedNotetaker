@@ -493,6 +493,7 @@ export class MainView extends LitElement {
         _groqKey: { state: true },
         _openrouterKey: { state: true },
         _answerModel: { state: true },
+        _reasoningEffort: { state: true },
         _tokenError: { state: true },
         _keyError: { state: true },
         // Local AI state
@@ -517,6 +518,7 @@ export class MainView extends LitElement {
         this._groqKey = '';
         this._openrouterKey = '';
         this._answerModel = '';
+        this._reasoningEffort = 'low';
         this._tokenError = false;
         this._keyError = false;
         this._showLocalHelp = false;
@@ -548,6 +550,7 @@ export class MainView extends LitElement {
             this._groqKey = await cheatingDaddy.storage.getGroqApiKey().catch(() => '') || '';
             this._openrouterKey = creds.openrouterKey || '';
             this._answerModel = window.require('./utils/answerModel').answerModelById(prefs.answerModel).id;
+            this._reasoningEffort = window.require('./utils/answerModel').thinkingEffortById(prefs.reasoningEffort).id;
 
             // Load local AI settings
             this._ollamaHost = prefs.ollamaHost || 'http://127.0.0.1:11434';
@@ -755,6 +758,12 @@ export class MainView extends LitElement {
         this.requestUpdate();
     }
 
+    async _saveReasoningEffort(val) {
+        this._reasoningEffort = val;
+        await cheatingDaddy.storage.updatePreference('reasoningEffort', val);
+        this.requestUpdate();
+    }
+
     _handleProfileChange(e) {
         this.onProfileChange(e.target.value);
     }
@@ -906,6 +915,17 @@ export class MainView extends LitElement {
                     ${window.require('./utils/answerModel').ANSWER_MODELS.map(model => html`<option value=${model.id} ?selected=${this._answerModel === model.id}>${model.label}</option>`)}
                 </select>
                 <div class="form-hint">Used when an OpenRouter key is saved. Applies from the next session.</div>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label">Thinking</label>
+                <select
+                    .value=${this._reasoningEffort}
+                    @change=${e => this._saveReasoningEffort(e.target.value)}
+                >
+                    ${window.require('./utils/answerModel').THINKING_EFFORTS.map(effort => html`<option value=${effort.id} ?selected=${this._reasoningEffort === effort.id}>${effort.label}</option>`)}
+                </select>
+                <div class="form-hint">How hard the answer model thinks on a new problem, code, a dry run and the coding hotkeys. Higher is slower to start. Small talk and follow-ups stay quick. Applies from the next session.</div>
             </div>
 
             <div class="form-group">
