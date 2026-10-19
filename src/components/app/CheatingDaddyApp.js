@@ -1170,11 +1170,7 @@ export class CheatingDaddyApp extends LitElement {
                 <nav class="sidebar-nav">
                     ${items.map(
                         item => html`
-                            <button
-                                class="nav-item ${this.currentView === item.id ? 'active' : ''}"
-                                @click=${() => this.navigate(item.id)}
-                                title=${item.label}
-                            >
+                            <button class="nav-item ${this.currentView === item.id ? 'active' : ''}" @click=${() => this.navigate(item.id)}>
                                 ${item.icon} ${item.label}
                             </button>
                         `
@@ -1221,7 +1217,7 @@ export class CheatingDaddyApp extends LitElement {
         return html`
             <div class="live-bar">
                 <div class="live-bar-left">
-                    <button class="live-bar-back" @click=${() => this.handleClose()} title="End session">
+                    <button class="live-bar-back" @click=${() => this.handleClose()} aria-label="End session">
                         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
                             <path
                                 fill-rule="evenodd"
@@ -1270,9 +1266,9 @@ export class CheatingDaddyApp extends LitElement {
             <div class="app-shell ${this._stealthHidden ? 'stealth-hidden' : ''}">
                 <div class="top-drag-bar ${isLive ? 'hidden' : ''}">
                     <div class="traffic-lights">
-                        <button class="traffic-light close" @click=${() => this.handleClose()} title="Close"></button>
-                        <button class="traffic-light minimize" @click=${() => this._handleMinimize()} title="Minimize"></button>
-                        <button class="traffic-light maximize" title="Maximize"></button>
+                        <button class="traffic-light close" @click=${() => this.handleClose()} aria-label="Close"></button>
+                        <button class="traffic-light minimize" @click=${() => this._handleMinimize()} aria-label="Minimize"></button>
+                        <button class="traffic-light maximize" aria-label="Maximize"></button>
                     </div>
                     <div class="drag-region"></div>
                 </div>

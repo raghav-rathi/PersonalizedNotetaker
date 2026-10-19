@@ -24,7 +24,7 @@ Join the call first, then press **Start Session** (or `Cmd+Enter` on the start s
 - two tabs, **Main** and **Follow-ups**
 - what the app is doing (Listening, Answering, Coding mode) and the time
 
-The app asks the system to keep the overlay out of screen sharing and screenshots. Check that on a test call with your meeting app before you rely on it.
+The app asks the system to keep the overlay out of screen sharing and screenshots. Its dropdown lists and error messages stay inside the overlay too. What can still show: on Windows, the tray icon and its right-click menu, and anything the app opens for you, such as a link in your browser. Check on a test call with your meeting app before you rely on it.
 
 ## Normal questions
 
