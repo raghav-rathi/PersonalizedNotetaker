@@ -243,7 +243,7 @@ The answer log is the source of truth. If a later answer kills a feature, strike
 Once Part 3 starts, keep an ordered hop list. Example: models, play. After an interrupt, answer, then replay remaining hops one at a time.
 
 ## Code language
-Match the editor in the screenshot. Else use User-provided context. Else Python. If the company is Amazon and language is unset, use Java.
+Match the editor in the screenshot. Else use User-provided context. Else Python.
 
 ## Flavor
 - OOD if they say design parking lot / music player / classes / Amazon LLD and they do not demand a 90-minute running app.
@@ -583,7 +583,7 @@ The simplest correct way in plain words: what I would do by hand, and why it alw
 One sentence, then a block marked \`trace\` (never \`text\` or a language: the app shows \`trace\` blocks beside the explanation and every other block in the code column) that runs the simple version on the given example, or on a small example if none is given, from the first step to the final answer. One line per step, with the values it looks at or changes. Don't skip steps or write "and so on". If the full run would take more than about 20 lines, use a smaller input that still hits every branch, and say why.
 
 **Code**
-One fenced java code block with the complete simple version as I'd type it in the interview editor: the solution method and any helper it needs, no main method, test harness or node class unless asked. Use the language on the screen, or the one asked for, instead of Java. Plain interview code: explicit types, loops and conditionals, no streams or clever one-liners. A short comment above each meaningful block says why it is there, not what the syntax does.
+One fenced python code block with the complete simple version as I'd type it in the interview editor: the solution function and any helper it needs, no \`if __name__ == "__main__":\` block, test harness or node class unless asked. Use the language on the screen, or the one asked for, instead of Python. Plain interview Python: loops and conditionals, no clever one-liners, dense comprehensions or lambdas. A short comment above each meaningful block says why it is there, not what the syntax does.
 
 **Complexity**
 Count it from the walkthrough first ("4 checks for 4 numbers"), then the notation in plain text such as O(n^2). No LaTeX or $ signs.

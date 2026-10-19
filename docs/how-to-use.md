@@ -79,7 +79,7 @@ Read every answer before you say it. The model can still add a detail that isn't
 ## A coding round, step by step
 
 1. **Put the problem on screen**, in front of other windows. The app reads it from a screenshot.
-2. **Press `Cmd+Option+1`.** Coding mode starts, the overlay gets wider, and **Part 1** appears on **Main**. Each card has two columns: on the left, what you say (it starts with "I can relate this to ..." when a well-known approach fits) and the walkthrough on the example; on the right, the Java code. Each side scrolls on its own.
+2. **Press `Cmd+Option+1`.** Coding mode starts, the overlay gets wider, and **Part 1** appears on **Main**. Each card has two columns: on the left, what you say (it starts with "I can relate this to ..." when a well-known approach fits) and the walkthrough on the example; on the right, the Python code. Each side scrolls on its own.
 3. **Say Part 1 from the left side and type the code from the right side.**
 4. **When the interviewer answers your questions**, the app hears it. You don't need to do anything.
 5. **When they ask "can you do better?"**, Part 2 (the better approach) appears by itself. You can also press `Cmd+Option+2`.
@@ -112,7 +112,7 @@ Pick **LLD Interview** or **HLD / System Design** as the profile before you star
 
 ## Changing a round's prompt
 
-In **AI Customization**, with a round profile picked, press **Edit round prompt**. The prompt file opens in your editor. Save it, and the next reply follows it. No rebuild or restart is needed. The file lives in the app's settings folder, so it survives updates. To go back to the built-in prompt, delete that file.
+In **AI Customization**, with a round profile picked, press **Edit round prompt**. The prompt file opens in your editor. Save it, and the next reply follows it. No rebuild or restart is needed. The file lives in the app's settings folder, so it survives updates. To go back to the built-in prompt, delete that file. A copy made before 2026-10-19 still asks for Java code; delete it to get the built-in Python version.
 
 ## Which answer model
 
