@@ -1049,7 +1049,7 @@ export class AssistantView extends LitElement {
                 <button
                     class="analyze-btn ${this.isAnalyzing ? 'analyzing' : ''}"
                     @click=${this.handleScreenAnswer}
-                    title="Analyze Screen (⌘↵)"
+                    aria-label="Analyze Screen (⌘↵)"
                     type="button"
                 >
                     <canvas class="analyze-canvas"></canvas>

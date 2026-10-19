@@ -1,8 +1,11 @@
 import { html, css, LitElement } from '../../assets/lit-core-2.7.4.min.js';
 import { PROFILES } from './profiles.js';
+import { inPageSelectStyles } from './selectStyles.js';
 
 export class MainView extends LitElement {
     static styles = css`
+        ${inPageSelectStyles}
+
         * {
             font-family: var(--font);
             cursor: default;
@@ -152,7 +155,6 @@ export class MainView extends LitElement {
 
         select {
             cursor: pointer;
-            appearance: none;
             background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%23999' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e");
             background-position: right 8px center;
             background-repeat: no-repeat;
