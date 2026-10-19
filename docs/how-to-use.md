@@ -14,16 +14,16 @@ This guide is for macOS. Windows keys are listed too, but they haven't been trie
     - **OpenRouter API key**. With it, the model you pick under **Answer Model** writes the answers.
     - **Answer Model**. GPT-6 Astra is the default. See "Which answer model" below.
 5. Open **AI Customization** in the sidebar and paste `docs/prompts/interview-prompt.txt` into **Custom Instructions**. It holds your background and the way answers should sound.
-6. Still in **AI Customization**, pick the **Profile** for the round: **Job Interview** for normal questions, or **Coding Round (DSA)**, **LLD Interview** or **HLD / System Design**. The profile decides which prompt runs the `Cmd+Option+1` to `Cmd+Option+6` steps, and it applies from the next session.
+6. Pick the round under **Mode** on the start screen, or under **Profile** in **AI Customization** (it's the same choice): **Job Interview** for normal questions, **Coding Round (DSA)**, **LLD Interview** or **HLD / System Design** for those rounds, or **DevOps / SRE Round** for an on-call incident drill. The round decides which prompt writes the answers and runs the `Cmd+Option+1` to `Cmd+Option+6` steps. It applies when the next session starts.
 7. In **Settings**, set **Audio Mode** to **Speaker Only (Interviewer)**.
 
 ## Starting a session
 
 Join the call first, then press **Start Session** (or `Cmd+Enter` on the start screen). The window turns into a small overlay at the top of the screen. The top bar shows:
 
-- the mode (Interview, or Coding during a coding round)
+- the mode (Interview, DevOps, or Coding during a coding round)
 - two tabs, **Main** and **Follow-ups**
-- what the app is doing (Listening, Answering, Coding mode) and the time
+- what the app is doing (Listening, Answering, Coding mode, DevOps mode) and the time
 
 **Make it fit your screen.** Drag the top bar to move the overlay. Drag its left, right or bottom edge, or a bottom corner, to resize it. The app remembers the size and place separately for normal answers and for coding mode, also after a restart. When it's narrower than about 760 px, a coding card shows the explanation above the code instead of beside it. Below 600 px the top bar hides the status and the clock.
 
@@ -110,9 +110,24 @@ Pick **LLD Interview** or **HLD / System Design** as the profile before you star
 | `Cmd+Option+5` | All the classes                       | Design summary                              |
 | `Cmd+Option+6` | Walk one use case through the objects | Follow one request from start to finish     |
 
+## A DevOps / on-call round
+
+Pick **DevOps / SRE Round** under **Mode** on the start screen. The overlay stays wide the whole session, so a query, a command or a status message sits in the right column. Every answer comes from the DevOps prompt, written like a calm senior on-call engineer: the decision first, every number against its baseline, a deploy treated as a suspect until its change can explain the error, and "fixed" only when your own metrics say so.
+
+1. **When the alert is on screen, press `Cmd+Option+7`** (new incident). The app takes a screenshot and reads what the interviewer just said, then gives your first move: how bad it is, where, and what you'd check first.
+2. **For each new piece of evidence** (the runbook, a deploy diff, logs, a response, a status page, metrics), the interviewer usually says "here's the ..." and the app attaches a screenshot by itself. If an answer didn't get the screen (no 📷), press `Cmd+Enter`.
+3. **For log lines or a long JSON response**, select them, copy them with `Cmd+C`, then press `Cmd+Option+0`. The copied text goes in exactly, where a screenshot can cut lines off. Up to 20,000 characters go along; longer text loses its middle.
+4. **Questions about evidence you already read** ("what about the 429s?", "could it be one tenant?") get a short answer on Follow-ups. If the answer changes the plan, Main shows the updated case board, marked "Changed after ...".
+5. **Main answers end with a small case board**: facts, ruled out, leading, next check. It's for you to glance at, not to read out.
+6. **The whole incident stays in one conversation** until the next `Cmd+Option+7`: what was heard, what you typed, every screenshot and every pasted text. Each answer is sent the first screenshot and the three newest; earlier answers already say what the others showed.
+7. **A coding question in the same interview**: put it on screen and press `Cmd+Option+1`. The DSA round runs as usual. `Cmd+Option+9` goes back to the incident, with everything it had.
+8. **Small talk and behavioral questions** use **Custom Instructions** in AI Customization (with DevOps picked) as your background: your years on call, your stack, an outage you handled. Answers don't invent experience beyond it.
+
+You can also type `new incident` followed by the alert text to start one without a screenshot.
+
 ## Changing a round's prompt
 
-In **AI Customization**, with a round profile picked, press **Edit round prompt**. The prompt file opens in your editor. Save it, and the next reply follows it. No rebuild or restart is needed. The file lives in the app's settings folder, so it survives updates. To go back to the built-in prompt, delete that file.
+In **AI Customization**, with a round profile picked (Coding, LLD, HLD or DevOps), press **Edit round prompt**. The prompt file opens in your editor. Save it, and the next reply follows it. No rebuild or restart is needed. The file lives in the app's settings folder, so it survives updates. To go back to the built-in prompt, delete that file.
 
 ## Which answer model
 
@@ -144,6 +159,8 @@ If the chosen model fails or stays silent too long, Gemini Flash answers instead
 | Full code                              | `Cmd+Option+5`                      | `Alt+Shift+5`                       |
 | Dry run                                | `Cmd+Option+6`                      | `Alt+Shift+6`                       |
 | Leave coding mode                      | `Cmd+Option+9`                      | `Alt+Shift+9`                       |
+| New incident (reads your screen)       | `Cmd+Option+7`                      | `Alt+Shift+7`                       |
+| Send copied text (DevOps or coding)    | `Cmd+Option+0`                      | `Alt+Shift+0`                       |
 | Previous / next answer                 | `Cmd+[` / `Cmd+]`                   | `Ctrl+[` / `Ctrl+]`                 |
 | Scroll the answers                     | `Cmd+Shift+Up` / `Cmd+Shift+Down`   | `Ctrl+Shift+Up` / `Ctrl+Shift+Down` |
 | Analyze Screen                         | `Cmd+Enter`                         | `Ctrl+Enter`                        |
@@ -158,4 +175,6 @@ You can change any of these in Settings.
 - **While the app runs, these keys work in every app.** `Cmd+Enter` takes a screenshot and sends it to the model, so don't use it to send a chat message. `Cmd+[` and `Cmd+]` won't indent code in your editor either.
 - **Never press `Cmd+Shift+E` while the app runs.** It is Emergency Erase: it deletes the app's settings, keys and history, and quits. VS Code uses the same keys for its Explorer.
 - **Check the problem is on screen** before `Cmd+Option+1`. If the model says it can't find a problem, put it in front and press `Cmd+Option+1` again, or type `new problem` with the text.
+- **`Cmd+Option+0` sends whatever is on the clipboard.** Copy the evidence right before you press it; a password or token you copied earlier would go to the model.
+- **A free Gemini key allows only 20 Gemini Flash answers a day** (Google's limit on 2026-10-19). Without a working OpenRouter key, Gemini Flash writes every answer, so a long interview can run out; the status bar then says "Gemini quota used up". Use an OpenRouter key, or a Gemini key with billing, for a real interview.
 - **Before an interview, try a practice round** with GPT-6.1 Sol to get used to the keys.

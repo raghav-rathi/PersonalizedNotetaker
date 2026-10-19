@@ -1,6 +1,7 @@
 // Coding mode keeps one conversation per problem, so every turn sees the problem, the interviewer's
 // answers, both pads and the code written so far. In ChatGPT the chat history did that; here the
 // whole conversation is sent on each turn, oldest first, so the prompt cache keeps hitting.
+// DevOps mode keeps one the same way per incident: the alert, every piece of evidence and every reply.
 const fs = require('fs');
 const path = require('path');
 
@@ -8,6 +9,8 @@ const { getConfigDir } = require('../storage');
 
 // The round picked in AI Customization decides which prompt runs the hotkey steps. Other profiles keep the DSA round.
 const ROUND_SKILLS = { coding: 'dsa-coding-skill.md', lld: 'lld-skill.md', hld: 'hld-skill.md' };
+// DevOps mode answers the whole session from its own prompt; its coding hotkeys still run the DSA round.
+const INCIDENT_SKILL = 'devops-skill.md';
 const BUILT_IN_SKILL_DIR = path.join(__dirname, '..', 'prompts');
 
 /** Hotkey commands, worded the way the skill expects them. */
@@ -22,21 +25,34 @@ const CODING_COMMANDS = {
 const EXIT_WORDS = /^\s*(?:exit|exit coding(?: mode)?|stop coding|end coding)\s*[.!]?\s*$/i;
 // "new problem", optionally followed by the problem text the user typed or pasted.
 const NEW_PROBLEM_WORDS = /^\s*new problem\b[\s:.,-]*/i;
+const NEW_INCIDENT_WORDS = /^\s*new incident\b[\s:.,-]*/i;
 
-let loggedSkillPath = '';
+// Every turn re-sends the whole conversation, so only the first screenshot (the problem or the alert) and
+// the newest ones go along; the replies already describe the ones in between.
+const MAX_SENT_SCREENSHOTS = 4;
+const DROPPED_SCREENSHOT_NOTE = '(The screenshot sent with this message is left out now, to keep the request small.)';
+// Pasted evidence longer than this keeps its start and its end, where the first errors and the latest lines are.
+const MAX_EVIDENCE_CHARS = 20000;
+
+const loggedSkillPaths = new Set();
 
 /** @param {string|null|undefined} profile */
 function skillFileName(profile) {
     return ROUND_SKILLS[/** @type {keyof typeof ROUND_SKILLS} */ (profile)] || ROUND_SKILLS.coding;
 }
 
+/** The prompt AI Customization's "Edit round prompt" opens: DevOps mode's own, otherwise the round's. */
+function roundPromptFileName(profile) {
+    return profile === 'devops' ? INCIDENT_SKILL : skillFileName(profile);
+}
+
 /**
  * Read on every turn, so an edited prompt applies from the next reply. A copy (or symlink) in the
  * settings folder wins, so the packaged app picks up prompt edits without a rebuild.
- * @param {string|null|undefined} profile
+ * @param {string} name
+ * @param {string} configDir
  */
-function loadCodingSkill(profile, configDir = getConfigDir()) {
-    const name = skillFileName(profile);
+function readSkill(name, configDir) {
     let skillPath = path.join(configDir, name);
     let text;
     try {
@@ -46,9 +62,18 @@ function loadCodingSkill(profile, configDir = getConfigDir()) {
         skillPath = path.join(BUILT_IN_SKILL_DIR, name);
         text = fs.readFileSync(skillPath, 'utf8');
     }
-    if (skillPath !== loggedSkillPath) console.log(`Coding prompt: ${skillPath}`);
-    loggedSkillPath = skillPath;
+    if (!loggedSkillPaths.has(skillPath)) console.log(`Round prompt: ${skillPath}`);
+    loggedSkillPaths.add(skillPath);
     return text;
+}
+
+/** @param {string|null|undefined} profile */
+function loadCodingSkill(profile, configDir = getConfigDir()) {
+    return readSkill(skillFileName(profile), configDir);
+}
+
+function loadIncidentSkill(configDir = getConfigDir()) {
+    return readSkill(INCIDENT_SKILL, configDir);
 }
 
 /**
@@ -56,13 +81,21 @@ function loadCodingSkill(profile, configDir = getConfigDir()) {
  * @param {string|null|undefined} profile
  */
 function ensureUserSkillFile(profile, configDir = getConfigDir()) {
-    const name = skillFileName(profile);
+    const name = roundPromptFileName(profile);
     const userPath = path.join(configDir, name);
     if (!fs.existsSync(userPath)) {
         fs.mkdirSync(configDir, { recursive: true });
         fs.copyFileSync(path.join(BUILT_IN_SKILL_DIR, name), userPath);
     }
     return userPath;
+}
+
+/** @param {string} text */
+function clipEvidence(text, maxChars = MAX_EVIDENCE_CHARS) {
+    const clean = text.replace(/\r\n?/g, '\n').trim();
+    if (clean.length <= maxChars) return clean;
+    const half = Math.floor(maxChars / 2);
+    return `${clean.slice(0, half)}\n[... ${clean.length - 2 * half} characters cut ...]\n${clean.slice(-half)}`;
 }
 
 /** @typedef {{role:'user'|'assistant', text:string, imageJpeg?:string|null}} ChatMessage */
@@ -108,10 +141,19 @@ class CodingSession {
      * @returns {ChatMessage[]}
      */
     messagesThrough(turn) {
+        const end = this.turns.indexOf(turn);
+        const turns = end === -1 ? this.turns : this.turns.slice(0, end + 1);
+        const shots = turns.filter(item => item.imageJpeg);
+        const sentShots = new Set([shots[0], ...shots.slice(1).slice(1 - MAX_SENT_SCREENSHOTS)]);
         /** @type {ChatMessage[]} */
         const messages = [];
-        for (const item of this.turns) {
-            messages.push({ role: 'user', text: item.text, imageJpeg: item.imageJpeg });
+        for (const item of turns) {
+            const dropped = item.imageJpeg && !sentShots.has(item);
+            messages.push({
+                role: 'user',
+                text: dropped ? `${item.text}\n${DROPPED_SCREENSHOT_NOTE}` : item.text,
+                imageJpeg: dropped ? null : item.imageJpeg,
+            });
             if (item === turn) break;
             if (item.reply.trim()) messages.push({ role: 'assistant', text: item.reply });
         }
@@ -119,4 +161,14 @@ class CodingSession {
     }
 }
 
-module.exports = { CODING_COMMANDS, EXIT_WORDS, NEW_PROBLEM_WORDS, loadCodingSkill, ensureUserSkillFile, CodingSession };
+module.exports = {
+    CODING_COMMANDS,
+    EXIT_WORDS,
+    NEW_PROBLEM_WORDS,
+    NEW_INCIDENT_WORDS,
+    loadCodingSkill,
+    loadIncidentSkill,
+    ensureUserSkillFile,
+    clipEvidence,
+    CodingSession,
+};

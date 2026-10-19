@@ -1,6 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { formatLiveAnswerText, formatAnswerForDisplay, splitCodeColumn } = require('./answerFormatting');
+const { formatLiveAnswerText, formatAnswerForDisplay, splitCodeColumn, escapeHtml, safeMarkdownRenderer } = require('./answerFormatting');
+const marked = require('../assets/marked-4.3.0.min.js');
 
 test('splits Question / Answer / Why labels into separate paragraphs', () => {
     const text = '**Question**: Is there a src folder? **Answer**: Yes. **Why**: It is visible on the left.';
@@ -66,4 +67,17 @@ test('a trace walkthrough is read, not typed, and stays in the explanation colum
 test('a code block still streaming goes to the code column, and prose alone has no code column', () => {
     assert.deepEqual(splitCodeColumn('Say this.\n```java\nint x = 1;'), { left: 'Say this.', right: '```java\nint x = 1;' });
     assert.deepEqual(splitCodeColumn('Just words.'), { left: 'Just words.', right: '' });
+});
+
+test('markup quoted in an answer shows as text, and only web and mail links stay links', () => {
+    const renderer = safeMarkdownRenderer(marked);
+    const render = text => marked.parse(text, { gfm: true, breaks: true, renderer });
+    assert.match(render('The body has <img src=x onerror=alert(1)> in it'), /&lt;img src=x onerror=alert\(1\)&gt;/);
+    assert.doesNotMatch(render('<script>alert(1)</script>\n\nnext'), /<script>/);
+    assert.match(render('Use a List<Integer> here'), /List&lt;Integer&gt;/);
+    assert.match(render('| field | value |\n|---|---|\n| kid | <b>missing</b> |'), /&lt;b&gt;missing&lt;\/b&gt;/);
+    assert.equal(render('[docs](javascript:alert(1))'), '<p>docs</p>\n');
+    assert.match(render('[runbook](https://example.com/rb)'), /<a href="https:\/\/example.com\/rb">runbook<\/a>/);
+    assert.match(render('```html\n<div>x</div>\n```'), /&lt;div&gt;x&lt;\/div&gt;/);
+    assert.equal(escapeHtml('<a href="x">&</a>'), '&lt;a href=&quot;x&quot;&gt;&amp;&lt;/a&gt;');
 });

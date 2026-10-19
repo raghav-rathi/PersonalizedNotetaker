@@ -1,4 +1,5 @@
 import { html, css, LitElement } from '../../assets/lit-core-2.7.4.min.js';
+import { PROFILE_NAMES } from './profiles.js';
 
 export class AssistantView extends LitElement {
     static styles = css`
@@ -457,32 +458,30 @@ export class AssistantView extends LitElement {
     }
 
     getProfileNames() {
-        return {
-            interview: 'Job Interview',
-            coding: 'Coding Round (DSA)',
-            lld: 'LLD Interview (SDE-2)',
-            hld: 'HLD / System Design',
-            sales: 'Sales Call',
-            meeting: 'Tech Meeting',
-            presentation: 'Presentation',
-            negotiation: 'Negotiation',
-            exam: 'Exam Assistant',
-        };
+        return PROFILE_NAMES;
     }
 
     getPlaceholderText() {
         if (this.screen === 'side') return 'Answers to follow-up questions show up here.';
+        if (this.selectedProfile === 'devops') {
+            const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+            const [screen, paste, incident] = isMac ? ['⌘↵', '⌘⌥0', '⌘⌥7'] : ['Ctrl+Enter', 'Alt+Shift+0', 'Alt+Shift+7'];
+            return `Listening to your DevOps round... ${screen} sends the screen, ${paste} sends copied logs, ${incident} starts a new incident.`;
+        }
         const profileNames = this.getProfileNames();
         return `Listening to your ${profileNames[this.selectedProfile] || 'session'}...`;
     }
 
     renderMarkdown(content) {
+        const { escapeHtml, safeMarkdownRenderer } = window.require('./utils/answerFormatting');
         if (typeof window !== 'undefined' && window.marked) {
             try {
+                this._markdownRenderer ||= safeMarkdownRenderer(window.marked);
                 window.marked.setOptions({
                     breaks: true,
                     gfm: true,
                     sanitize: false,
+                    renderer: this._markdownRenderer,
                     langPrefix: 'hljs language-',
                     highlight: (code, lang) => {
                         const hljs = window.hljs;
@@ -501,10 +500,10 @@ export class AssistantView extends LitElement {
                 return rendered;
             } catch (error) {
                 console.warn('Error parsing markdown:', error);
-                return content;
+                return escapeHtml(content);
             }
         }
-        return content;
+        return escapeHtml(content);
     }
 
     wrapWordsInSpans(html) {

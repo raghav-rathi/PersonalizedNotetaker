@@ -2,7 +2,7 @@ const { BrowserWindow, globalShortcut, ipcMain, screen, Menu } = require('electr
 const path = require('node:path');
 const storage = require('../storage');
 const { startOptionTapMonitor, stopOptionTapMonitor } = require('./optionTapMonitor');
-const { handleCodingCommand } = require('./gemini');
+const { handleCodingCommand, handleIncidentCommand } = require('./gemini');
 const {
     canRegisterGlobalShortcut,
     getDefaultToggleVisibility,
@@ -296,6 +296,9 @@ function getDefaultKeybinds() {
         codingFullCode: isMac ? 'Cmd+Alt+5' : 'Alt+Shift+5',
         codingDryRun: isMac ? 'Cmd+Alt+6' : 'Alt+Shift+6',
         codingExit: isMac ? 'Cmd+Alt+9' : 'Alt+Shift+9',
+        // DevOps mode. Cmd+Option+8 is the macOS zoom shortcut, so these take 7 and 0.
+        newIncident: isMac ? 'Cmd+Alt+7' : 'Alt+Shift+7',
+        pasteCopiedText: isMac ? 'Cmd+Alt+0' : 'Alt+Shift+0',
     };
 }
 
@@ -466,6 +469,11 @@ function updateGlobalShortcuts(keybinds, mainWindow, sendToRenderer, geminiSessi
         const result = handleCodingCommand(name);
         if (result.error) sendToRenderer('update-status', result.error);
     };
+    /** @param {'new'|'paste'} name */
+    const runIncidentCommand = name => {
+        const result = handleIncidentCommand(name);
+        if (result.error) sendToRenderer('update-status', result.error);
+    };
     const commandActions = {
         showMainAnswers: () => sendToRenderer('switch-answer-screen', 'main'),
         showFollowUps: () => sendToRenderer('switch-answer-screen', 'side'),
@@ -476,13 +484,24 @@ function updateGlobalShortcuts(keybinds, mainWindow, sendToRenderer, geminiSessi
         codingFullCode: () => runCodingCommand('full'),
         codingDryRun: () => runCodingCommand('dryrun'),
         codingExit: () => runCodingCommand('exit'),
+        newIncident: () => runIncidentCommand('new'),
+        pasteCopiedText: () => runIncidentCommand('paste'),
     };
     for (const [action, run] of Object.entries(commandActions)) {
         const keybind = keybinds[action];
         if (!keybind) continue;
+        // An exception thrown here opens Electron's modal error box, which freezes the app mid-call.
+        const guarded = () => {
+            try {
+                run();
+            } catch (error) {
+                console.error(`${action} failed:`, error);
+                sendToRenderer('update-status', `${action} failed: ${error.message}`);
+            }
+        };
         try {
             // register() returns false when another app already owns the chord.
-            if (globalShortcut.register(keybind, run)) console.log(`Registered ${action}: ${keybind}`);
+            if (globalShortcut.register(keybind, guarded)) console.log(`Registered ${action}: ${keybind}`);
             else console.warn(`Could not register ${action} (${keybind}): another app already uses it`);
         } catch (error) {
             console.error(`Failed to register ${action} (${keybind}):`, error);

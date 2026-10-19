@@ -1,5 +1,6 @@
 import { html, css, LitElement } from '../../assets/lit-core-2.7.4.min.js';
 import { unifiedPageStyles } from './sharedPageStyles.js';
+import { PROFILES } from './profiles.js';
 
 export class AICustomizeView extends LitElement {
     static styles = [
@@ -88,18 +89,6 @@ export class AICustomizeView extends LitElement {
     }
 
     render() {
-        const profiles = [
-            { value: 'interview', label: 'Job Interview' },
-            { value: 'coding', label: 'Coding Round (DSA)' },
-            { value: 'lld', label: 'LLD Interview (SDE-2)' },
-            { value: 'hld', label: 'HLD / System Design' },
-            { value: 'sales', label: 'Sales Call' },
-            { value: 'meeting', label: 'Tech Meeting' },
-            { value: 'presentation', label: 'Presentation' },
-            { value: 'negotiation', label: 'Negotiation' },
-            { value: 'exam', label: 'Exam Assistant' },
-        ];
-
         return html`
             <div class="unified-page">
                 <div class="unified-wrap">
@@ -112,17 +101,24 @@ export class AICustomizeView extends LitElement {
                             <div class="form-group">
                                 <label class="form-label">Profile</label>
                                 <select class="control" .value=${this.selectedProfile} @change=${this._handleProfileChange}>
-                                    ${profiles.map(profile => html`<option value=${profile.value} ?selected=${profile.value === this.selectedProfile}>${profile.label}</option>`)}
+                                    ${PROFILES.map(profile => html`<option value=${profile.value} ?selected=${profile.value === this.selectedProfile}>${profile.label}</option>`)}
                                 </select>
                             </div>
                             ${
-                                ['coding', 'lld', 'hld'].includes(this.selectedProfile)
+                                ['coding', 'lld', 'hld', 'devops'].includes(this.selectedProfile)
                                     ? html`<div class="form-group">
                                               <label class="form-label">Round Prompt</label>
                                               <button class="control" type="button" @click=${() => this._openRoundPrompt()}>Edit round prompt</button>
                                           </div>
                                           <div class="form-help">
-                                              ${this._promptStatus || 'Runs the ⌘⌥1 to ⌘⌥6 steps. Edits apply from the next reply, no rebuild or restart.'}
+                                              ${
+                                                  this._promptStatus ||
+                                                  `${
+                                                      this.selectedProfile === 'devops'
+                                                          ? 'Writes every DevOps answer; the coding hotkeys keep the DSA round prompt.'
+                                                          : 'Runs the ⌘⌥1 to ⌘⌥6 steps.'
+                                                  } Edits apply from the next reply, no rebuild or restart.`
+                                              }
                                           </div>`
                                     : ''
                             }
@@ -168,7 +164,9 @@ export class AICustomizeView extends LitElement {
                     placeholder=${
                         this.selectedProfile === 'lld'
                             ? 'Optional: Java or Python, Amazon/Flipkart, any use cases they already sent...'
-                            : 'Resume details, role requirements, constraints...'
+                            : this.selectedProfile === 'devops'
+                              ? 'Your background for small talk and behavioral questions: years on call, your stack (AWS, Kubernetes, Terraform...), an outage you handled...'
+                              : 'Resume details, role requirements, constraints...'
                     }
                     .value=${this._context}
                     @input=${e => this._saveContext(e.target.value)}
@@ -177,7 +175,9 @@ export class AICustomizeView extends LitElement {
                     ${
                         this.selectedProfile === 'lld'
                             ? 'LLD coach is already in the profile. Put only language, company, or a pasted spec here.'
-                            : 'Sent as context at session start. Keep it short.'
+                            : this.selectedProfile === 'devops'
+                              ? 'Added to every DevOps answer as "About me". Answers never invent experience beyond it.'
+                              : 'Sent as context at session start. Keep it short.'
                     }
                 </div>
             </div>

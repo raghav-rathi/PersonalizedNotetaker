@@ -257,6 +257,32 @@ async function answerWithFallback({ primary, fallback, signal, onText, firstText
     return { ...result, usedFallback: true, primaryError };
 }
 
+/**
+ * One readable line for the status bar. Gemini's SDK puts the API's JSON body in the message, and that body can wrap another one.
+ * @param {unknown} error
+ */
+function shortErrorMessage(error) {
+    let text = String(error instanceof Error ? error.message : error);
+    for (let depth = 0; depth < 3; depth++) {
+        let inner;
+        try {
+            const parsed = JSON.parse(text);
+            inner = parsed?.error?.message ?? parsed?.message;
+        } catch {
+            break;
+        }
+        if (typeof inner !== 'string') break;
+        text = inner;
+    }
+    if (/exceeded your current quota/i.test(text)) {
+        const [, hours = '', minutes = '', seconds = ''] = text.match(/retry in (\d+h)?(\d+m)?(?:([\d.]+)s)?/i) || [];
+        const wait = hours || minutes ? `${hours}${minutes}` : seconds ? `${Math.ceil(Number(seconds))}s` : '';
+        return `Gemini quota used up${/free_tier/.test(text) ? ' on the free tier' : ''}${wait ? `, retry in ${wait}` : ''}`;
+    }
+    const firstLine = text.trim().split('\n')[0];
+    return firstLine.length > 160 ? `${firstLine.slice(0, 159)}…` : firstLine;
+}
+
 module.exports = {
     ANSWER_MODELS,
     THINKING_EFFORTS,
@@ -267,4 +293,5 @@ module.exports = {
     createSseParser,
     streamOpenRouterAnswer,
     answerWithFallback,
+    shortErrorMessage,
 };

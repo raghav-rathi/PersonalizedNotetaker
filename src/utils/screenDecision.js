@@ -45,13 +45,43 @@ const DEPTH_QUESTION = {
     },
 };
 
+// An incident drill puts each piece of evidence on the shared screen and then asks about it, so most
+// questions point at the screen even without "this".
+const INCIDENT_SCREEN_QUESTION = {
+    type: 'choice',
+    instructions:
+        "The user is in a live DevOps / on-call incident interview and reads answers from an overlay. The interviewer puts evidence on the shared screen piece by piece. Decide whether answering the latest line needs a screenshot of the user's screen.",
+    criteria: {
+        now: 'The latest line points at evidence on screen: "here\'s", "this", the alert, the runbook, the deploy or diff, the logs, a response, a status page, metrics, a dashboard or code, or asks what the user sees.',
+        wait: 'The speaker is about to paste or share the next piece of evidence, and the real question will come after it appears. No answer is needed yet.',
+        no: 'A follow-up about evidence already discussed, a concept question, small talk or a behavioral question.',
+    },
+};
+
+const INCIDENT_DEPTH_QUESTION = {
+    type: 'choice',
+    instructions:
+        'The user is in a live DevOps / on-call incident interview and reads answers from an overlay. Decide whether the answer to the latest line can be written at once, or needs the model to think it through first.',
+    criteria: {
+        quick: 'Small talk, a behavioral or experience question, a definition or concept question (what an SLO is, what a 429 means), a clarification, or a short follow-up about evidence already discussed.',
+        think: 'New evidence to read (an alert, logs, a diff, a response body, a status page, metrics); a decision such as rolling back, mitigating or escalating; whether the incident is fixed; what to tell people; what to change after the incident; a coding problem; or the interviewer pushes back on the earlier answer.',
+    },
+};
+
+/** @param {string|null} profile */
+function questionsFor(profile) {
+    if (profile === 'meeting') return { screen: MEETING_SCREEN_QUESTION, depth: DEPTH_QUESTION };
+    if (profile === 'devops') return { screen: INCIDENT_SCREEN_QUESTION, depth: INCIDENT_DEPTH_QUESTION };
+    return { screen: SCREEN_QUESTION, depth: DEPTH_QUESTION };
+}
+
 /** @param {{recent?:string, latest:string, typed?:boolean, profile?:string|null}} input */
 function buildScreenDecisionRequest({ recent = '', latest, typed = false, profile = null }) {
     const who = typed ? 'Latest line typed by the user' : 'Latest line from the other person';
     return {
         model: JEV_MODEL,
         state: `${recent.trim() ? `Earlier: ${recent.trim()}\n` : ''}${who}: ${latest}`,
-        questions: { screen: profile === 'meeting' ? MEETING_SCREEN_QUESTION : SCREEN_QUESTION, depth: DEPTH_QUESTION },
+        questions: questionsFor(profile),
     };
 }
 

@@ -1060,19 +1060,22 @@ export class CheatingDaddyApp extends LitElement {
     updated(changedProperties) {
         super.updated(changedProperties);
 
+        // Coding mode widens the live overlay so the explanation and the code fit side by side. DevOps answers
+        // often carry a query or a command too, so DevOps mode stays wide the whole session.
+        const wide = this.codingMode || this.selectedProfile === 'devops';
         if (changedProperties.has('currentView') && window.require) {
             const { ipcRenderer } = window.require('electron');
             ipcRenderer.send('view-changed', this.currentView);
+            if (this.currentView === 'assistant' && wide) ipcRenderer.send('coding-layout', true);
         }
 
-        // Coding mode widens the live overlay so the explanation and the code fit side by side.
         if (
             changedProperties.has('codingMode') &&
             changedProperties.get('codingMode') !== undefined &&
             this.currentView === 'assistant' &&
             window.require
         ) {
-            window.require('electron').ipcRenderer.send('coding-layout', this.codingMode);
+            window.require('electron').ipcRenderer.send('coding-layout', wide);
         }
     }
 
@@ -1286,6 +1289,7 @@ export class CheatingDaddyApp extends LitElement {
             coding: 'Coding Round',
             lld: 'LLD Interview',
             hld: 'HLD Interview',
+            devops: 'DevOps',
             sales: 'Sales Call',
             meeting: 'Tech Meeting',
             presentation: 'Presentation',

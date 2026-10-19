@@ -87,4 +87,27 @@ function splitCodeColumn(markdown) {
     return { left: left.join('\n').trim(), right: right.join('\n').trim() };
 }
 
-module.exports = { formatLiveAnswerText, formatAnswerForDisplay, splitCodeColumn };
+// Answers quote logs, JSON and code, and the overlay renders them in a window that can run Node, so any
+// markup in an answer is shown as text and only web and mail links stay clickable.
+const SAFE_LINK = /^\s*(?:https?:|mailto:)/i;
+
+/** @param {string} text */
+function escapeHtml(text) {
+    return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/**
+ * A marked renderer that shows raw HTML as text and turns links that could run script into plain text.
+ * @param {{Renderer: new () => any}} marked
+ */
+function safeMarkdownRenderer(marked) {
+    const renderer = new marked.Renderer();
+    const link = renderer.link;
+    renderer.html = html => escapeHtml(html);
+    renderer.link = function (href, title, text) {
+        return SAFE_LINK.test(href || '') ? link.call(this, href, title, text) : text;
+    };
+    return renderer;
+}
+
+module.exports = { formatLiveAnswerText, formatAnswerForDisplay, splitCodeColumn, escapeHtml, safeMarkdownRenderer };

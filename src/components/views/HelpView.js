@@ -144,6 +144,8 @@ export class HelpView extends LitElement {
             codingFullCode: isMac ? 'Cmd+Alt+5' : 'Alt+Shift+5',
             codingDryRun: isMac ? 'Cmd+Alt+6' : 'Alt+Shift+6',
             codingExit: isMac ? 'Cmd+Alt+9' : 'Alt+Shift+9',
+            newIncident: isMac ? 'Cmd+Alt+7' : 'Alt+Shift+7',
+            pasteCopiedText: isMac ? 'Cmd+Alt+0' : 'Alt+Shift+0',
         };
     }
 
@@ -177,6 +179,8 @@ export class HelpView extends LitElement {
             ['Coding: Full Code', this.keybinds.codingFullCode],
             ['Coding: Dry Run', this.keybinds.codingDryRun],
             ['Coding: Exit', this.keybinds.codingExit],
+            ['DevOps: New Incident', this.keybinds.newIncident],
+            ['Paste Copied Text', this.keybinds.pasteCopiedText],
         ];
 
         return html`

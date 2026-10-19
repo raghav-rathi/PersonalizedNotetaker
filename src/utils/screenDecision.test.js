@@ -63,3 +63,12 @@ test('a meeting asks Jev a stricter two-way question: attach only when the answe
     assert.deepEqual(Object.keys(request.questions.screen.criteria), ['now', 'no']);
     assert.deepEqual(Object.keys(buildScreenDecisionRequest({ latest: 'q', profile: 'interview' }).questions.screen.criteria), ['now', 'wait', 'no']);
 });
+
+test('an incident drill asks Jev about evidence on screen and thinks for evidence and decisions', () => {
+    const { screen, depth } = buildScreenDecisionRequest({ latest: "Here's the runbook.", profile: 'devops' }).questions;
+    assert.deepEqual(Object.keys(screen.criteria), ['now', 'wait', 'no']);
+    assert.match(screen.instructions, /incident/);
+    assert.deepEqual(Object.keys(depth.criteria), ['quick', 'think']);
+    assert.match(depth.criteria.think, /roll/);
+    assert.doesNotMatch(buildScreenDecisionRequest({ latest: 'q' }).questions.screen.instructions, /incident/);
+});

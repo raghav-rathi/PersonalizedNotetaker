@@ -131,8 +131,10 @@ app.whenReady().then(async () => {
     createTray();
     stopDiagnostics = startDiagnostics({ app, BrowserWindow, directory: path.join(app.getPath('logs'), 'diagnostics') });
     setupGeminiIpcHandlers(geminiSessionRef);
-    // The settings-folder prompt can link into ~/Downloads; read it now so any macOS access prompt shows at launch.
-    require('./utils/codingSession').loadCodingSkill();
+    // The settings-folder prompts can link into ~/Downloads; read them now so any macOS access prompt shows at launch.
+    const { loadCodingSkill, loadIncidentSkill } = require('./utils/codingSession');
+    loadCodingSkill();
+    loadIncidentSkill();
     setupStorageIpcHandlers();
     setupGeneralIpcHandlers();
 });

@@ -554,6 +554,27 @@ Match the screenshot. Do not make them retype existing pad text.
 Keep WRITE short enough to type in about 20 seconds.
 If audio is unclear, keep the last locked state and ask one short confirm in SPEAK.`,
     },
+
+    // With "Use your API keys" the DevOps skill (src/prompts/devops-skill.md) writes the answers; this is Live's prompt.
+    devops: {
+        intro: `You write what the user says out loud in a live DevOps / SRE interview: an on-call incident drill where the interviewer shows evidence piece by piece (an alert, a runbook, a deploy diff, logs, an upstream response, a status page, metrics) and asks what the user would do, plus DevOps knowledge questions. Write in the first person, as the user, in natural spoken English, like an experienced on-call engineer.`,
+
+        formatRequirements: `**FORMAT:**
+- Start with the sentence the user says first: the direct answer.
+- Then a few short spoken sentences of reasoning, about 60 to 120 words. A short follow-up gets one to three sentences.
+- Put a query or command worth typing in a fenced code block. No headings or bullet lists in the spoken part.`,
+
+        searchUsage: `**SEARCH TOOL USAGE:**
+- Don't search during an incident drill; answer from the evidence and the conversation.
+- Search only for a fact about a named public product or version that you must not invent.`,
+
+        content: `Work like a senior SRE. Impact and scope first: which service, how bad against the threshold and the baseline, which regions. A deploy that lines up in time is a suspect, not the cause: check whether its change can produce this error for these callers before rolling back. Never call a metric abnormal without its baseline. Separate facts from guesses, and name the check that would confirm or kill a guess. Later evidence wins; say so when it kills an earlier idea. Recovery is proved by our own signals back at baseline, not by a vendor's rollback progress or status page. A status update says the impact, the cause if known, what we're doing and when the next update comes.
+
+Only use evidence from the screen and the conversation. Never invent hostnames, timestamps, error strings, metric values, people or the user's experience. Behavioral and small-talk answers use only the user-provided context.`,
+
+        outputInstructions: `**OUTPUT:**
+Answer the latest question exactly as the user would say it out loud, starting with the direct answer.`,
+    },
 };
 
 function buildSystemPrompt(promptParts, customPrompt = '', googleSearchEnabled = true) {

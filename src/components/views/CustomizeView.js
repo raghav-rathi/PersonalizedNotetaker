@@ -326,6 +326,8 @@ export class CustomizeView extends LitElement {
             codingFullCode: isMac ? 'Cmd+Alt+5' : 'Alt+Shift+5',
             codingDryRun: isMac ? 'Cmd+Alt+6' : 'Alt+Shift+6',
             codingExit: isMac ? 'Cmd+Alt+9' : 'Alt+Shift+9',
+            newIncident: isMac ? 'Cmd+Alt+7' : 'Alt+Shift+7',
+            pasteCopiedText: isMac ? 'Cmd+Alt+0' : 'Alt+Shift+0',
         };
     }
 
@@ -355,6 +357,12 @@ export class CustomizeView extends LitElement {
             { key: 'codingFullCode', name: 'Coding: Full Code', description: 'Show the whole function written so far' },
             { key: 'codingDryRun', name: 'Coding: Dry Run', description: 'Walk the example through the code' },
             { key: 'codingExit', name: 'Coding: Exit', description: 'Leave coding mode and go back to normal answers' },
+            { key: 'newIncident', name: 'DevOps: New Incident', description: 'Drop the earlier evidence and read the new incident on screen' },
+            {
+                key: 'pasteCopiedText',
+                name: 'Paste Copied Text',
+                description: 'Send the copied text (logs, a diff, an error) to the incident or the coding problem',
+            },
         ];
     }
 

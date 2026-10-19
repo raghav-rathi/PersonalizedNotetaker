@@ -20,7 +20,7 @@ A real-time AI assistant that provides contextual help during video calls, inter
 
 - **Live AI Assistance**: Real-time help powered by Google Gemini 2.0 Flash Live
 - **Screen & Audio Capture**: Analyzes what you see and hear for contextual responses
-- **Multiple Profiles**: Interview, Sales Call, Business Meeting, Presentation, Negotiation
+- **Multiple Profiles**: Interview, Coding (DSA), LLD and HLD rounds, DevOps / SRE round, Sales Call, Tech Meeting, Presentation, Negotiation
 - **Transparent Overlay**: Always-on-top window that can be positioned anywhere
 - **Click-through Mode**: Make window transparent to clicks when needed
 - **Cross-platform**: Works on macOS, Windows, and Linux (kinda, dont use, just for testing rn)
@@ -34,7 +34,7 @@ A real-time AI assistant that provides contextual help during video calls, inter
 ## Usage
 
 1. Enter your Gemini API key in the main window
-2. Choose your profile and language in settings
+2. Choose the mode on the start screen (the same choice as Profile in AI Context) and the language in settings
 3. Click "Start Session" to begin
 4. Position the window using keyboard shortcuts
 5. The AI will provide real-time assistance based on your screen and what interview asks
@@ -68,6 +68,16 @@ For a DSA coding round, put the problem on screen and press `Cmd+Option+1`. The 
 - Analyze Screen in coding mode sends the screenshot into the same conversation, for example to check your code or a failing test.
 - **Type along.** While a step with code or a pad is on Main, a strip under the answers shows the line to type now, with the line before and after it. Say the line (the comments are the reasons), type it in the editor and press Enter, and the strip moves to the next line by itself. `Cmd+Option+Up/Down` (`Alt+Shift+Up/Down` on Windows) move it back or forward when it gets out of step, for example after you accept an autocomplete suggestion with Enter. Enter only counts while the strip is showing, and Enter in the app's own message box never counts. It uses the same macOS Accessibility permission as the Option-tap hide.
 
+### DevOps mode
+
+For an on-call or SRE round, pick **DevOps / SRE Round** under **Mode** on the start screen. Every answer then comes from `src/prompts/devops-skill.md`, in the voice of a calm senior on-call engineer: the decision first, every number against its baseline, a deploy treated as a suspect until its change can explain the error, and "fixed" only when your own metrics say so. The overlay stays wide, so a query or a status message sits in the right column.
+
+- `Cmd+Option+7` starts a new incident from a screenshot of the alert and what the interviewer just said. Typing `new incident` followed by text does the same.
+- From then on the incident is one conversation: what the interviewer says, what you type, each screenshot (`Cmd+Enter`, or by itself when they say "here's the ...") and text you copied and sent with `Cmd+Option+0`. Copy log lines and send them that way when a screenshot would cut them off.
+- Main answers end with a short case board (facts, ruled out, leading, next check) to glance at. Questions such as "what about the 429s?" get a short answer on Follow-ups.
+- The coding keys still run a DSA question in the same interview: `Cmd+Option+1` starts it and `Cmd+Option+9` goes back to the incident.
+- Your background for small talk and behavioral questions comes from **AI Context → Custom Instructions** with DevOps picked. Answers don't invent experience beyond it.
+
 Answer length, voice and content come from **AI Context → Custom Instructions**. `docs/prompts/interview-prompt.txt` is a ready-made version in the voice of a mid-level engineer talking, with short sentences, contractions and plain words. Answer length fits the question: 10 to 20 seconds to name something, about 40 seconds for a definition, about a minute for why, how and experience questions, and about a minute and a half for a story. It includes practiced answers for seven likely questions. It brings up your background only when the question is about you, builds stories only from the listed facts, and has a coding mode. Paste it in, then start a new session; custom instructions are loaded at session start.
 
 `docs/prompts/interview-prompt-deeper-draft.txt` is an alternative draft, not in use. It asks for more technical depth (how things work underneath, the real component names, the tradeoff). In a blind test with GPT-6 Astra it gave the stronger interview answer in 17 of 28 comparisons but sounded less natural, and its lengths and practiced answers predate the shorter targets.
@@ -82,6 +92,7 @@ Word counts are generation targets, not guarantees. Read an answer before you sa
 - **Analyze Screen**: `Ctrl/Cmd + Enter`. While the app runs this works in every app, so don't use it to send messages elsewhere.
 - **Main / Follow-ups screen**: `Cmd + Option + Left/Right` on Mac, `Alt + Shift + Left/Right` on Windows
 - **Coding mode**: `Cmd + Option + 1-6, 9` on Mac, `Alt + Shift + 1-6, 9` on Windows (see Coding mode)
+- **DevOps mode**: `Cmd + Option + 7` new incident, `Cmd + Option + 0` send copied text on Mac; `Alt + Shift + 7` and `Alt + Shift + 0` on Windows
 - **Type along**: `Cmd + Option + Up/Down` on Mac, `Alt + Shift + Up/Down` on Windows - line back/forward
 - **Send Message**: `Enter` - Send text to AI
 

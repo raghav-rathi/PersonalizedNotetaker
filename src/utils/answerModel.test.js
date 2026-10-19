@@ -8,6 +8,7 @@ const {
     createSseParser,
     streamOpenRouterAnswer,
     answerWithFallback,
+    shortErrorMessage,
 } = require('./answerModel');
 
 const astra = answerModelById('openai/gpt-6-astra');
@@ -299,4 +300,24 @@ test('an answer cancelled by a newer question never falls back', async () => {
     cancel.abort();
     await assert.rejects(pending);
     assert.equal(fallbackCalls, 0);
+});
+
+test('a failed answer shows one short line, and a used-up Gemini quota says when to retry', () => {
+    const quotaBody = {
+        error: {
+            code: 429,
+            message:
+                'You exceeded your current quota, please check your plan and billing details.\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-3.8-flash\nPlease retry in 15h51m41.52597089s.',
+            status: 'RESOURCE_EXHAUSTED',
+        },
+    };
+    const quota = new Error(JSON.stringify({ error: { message: JSON.stringify(quotaBody), code: 429, status: 'Too Many Requests' } }));
+    assert.equal(shortErrorMessage(quota), 'Gemini quota used up on the free tier, retry in 15h51m');
+    assert.equal(shortErrorMessage(new Error('You exceeded your current quota. Please retry in 41.5s.')), 'Gemini quota used up, retry in 42s');
+    assert.equal(
+        shortErrorMessage(new Error('OpenRouter 401: {"error":{"message":"API key expired"}}')),
+        'OpenRouter 401: {"error":{"message":"API key expired"}}'
+    );
+    assert.equal(shortErrorMessage(new Error(`fetch failed\n${'x'.repeat(300)}`)), 'fetch failed');
+    assert.equal(shortErrorMessage(new Error('y'.repeat(200))).length, 160);
 });

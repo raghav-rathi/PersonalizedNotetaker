@@ -1,4 +1,5 @@
 import { html, css, LitElement } from '../../assets/lit-core-2.7.4.min.js';
+import { PROFILES } from './profiles.js';
 
 export class MainView extends LitElement {
     static styles = css`
@@ -768,6 +769,13 @@ export class MainView extends LitElement {
         this.onProfileChange(e.target.value);
     }
 
+    _modeHint() {
+        if (this.selectedProfile !== 'devops') return 'What the answers are for. The same choice as Profile in AI Context.';
+        const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+        const [newIncident, paste] = isMac ? ['⌘⌥7', '⌘⌥0'] : ['Alt+Shift+7', 'Alt+Shift+0'];
+        return `Answers like an on-call DevOps engineer and keeps the whole incident in mind: everything heard, every screenshot, every pasted log. ${newIncident} starts a new incident, ${paste} sends copied text. The coding hotkeys still run a DSA question.`;
+    }
+
     // ── Start ──
 
     _handleStart() {
@@ -907,6 +915,17 @@ export class MainView extends LitElement {
             </div>
 
             <div class="form-group">
+                <label class="form-label">Mode</label>
+                <select
+                    .value=${this.selectedProfile}
+                    @change=${e => this._handleProfileChange(e)}
+                >
+                    ${PROFILES.map(profile => html`<option value=${profile.value} ?selected=${this.selectedProfile === profile.value}>${profile.label}</option>`)}
+                </select>
+                <div class="form-hint">${this._modeHint()}</div>
+            </div>
+
+            <div class="form-group">
                 <label class="form-label">Answer Model</label>
                 <select
                     .value=${this._answerModel}
@@ -925,7 +944,7 @@ export class MainView extends LitElement {
                 >
                     ${window.require('./utils/answerModel').THINKING_EFFORTS.map(effort => html`<option value=${effort.id} ?selected=${this._reasoningEffort === effort.id}>${effort.label}</option>`)}
                 </select>
-                <div class="form-hint">How hard the answer model thinks on a new problem, code, a dry run and the coding hotkeys. Higher is slower to start. Small talk and follow-ups stay quick. Applies from the next session.</div>
+                <div class="form-hint">How hard the answer model thinks on a new problem, code, a dry run, new incident evidence and the hotkeys. Higher is slower to start. Small talk and follow-ups stay quick. Applies from the next session.</div>
             </div>
 
             <div class="form-group">
