@@ -61,7 +61,7 @@ The overlay has a **Main** screen and a **Follow-ups** screen, with tabs in the 
 
 In **Use your API keys**, choose **DevOps / SRE Round** under **Mode**. Each time the interviewer shows a new log or evidence card, press `Cmd+Enter` on Mac, `Ctrl+Enter` on Windows, or click **Analyze Screen**. The answer appears on Main and ends with one request for the next evidence. Repeat the same capture action; earlier screenshots and answers stay in the incident conversation. Follow-up questions go to Follow-ups without replacing the main answer.
 
-The prompt in `src/prompts/devops-skill.md` follows the supplied Authd OCI preparation skill, including its rule against revealing evidence before the interviewer does. There are no extra incident or clipboard hotkeys. Python DSA mode still works separately, and exiting it returns to the incident. See [the DevOps workflow](docs/how-to-use.md#devops-incident-round).
+The prompt in `src/prompts/devops-skill.md` follows the supplied Authd OCI preparation skill, including its rule against revealing evidence before the interviewer does. Answers are written to be read out loud, in short spoken sentences, and Custom Instructions aren't sent in this mode. There are no extra incident or clipboard hotkeys. Python DSA mode still works separately, and exiting it returns to the incident. See [the DevOps workflow](docs/how-to-use.md#devops-incident-round).
 
 ### Coding mode
 

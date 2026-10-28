@@ -962,7 +962,7 @@ export class MainView extends LitElement {
                 >
                     ${window.require('./utils/answerModel').THINKING_EFFORTS.map(effort => html`<option value=${effort.id} ?selected=${this._reasoningEffort === effort.id}>${effort.label}</option>`)}
                 </select>
-                <div class="form-hint">How hard the answer model thinks on coding steps and DevOps screen captures. Higher is slower to start. Small talk and follow-ups stay quick. Applies from the next session.</div>
+                <div class="form-hint">How hard the answer model thinks on a new problem, code, a dry run, the coding hotkeys and DevOps screen captures. Higher is slower to start. Small talk and follow-ups stay quick. Applies from the next session.</div>
             </div>
 
             <div class="form-group">

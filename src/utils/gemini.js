@@ -995,15 +995,13 @@ function sendCodingTurn({ text, label, imageJpeg = null, turnId = createTurnId('
 /** @param {{text:string, label:string, imageJpeg?:string|null, turnId?:string, lane?:'main'|'side'|null, depth?:import('./answerModel').AnswerDepth}} turn */
 function sendIncidentTurn({ text, label, imageJpeg = null, turnId = createTurnId('incident'), lane = null, depth = 'think' }) {
     const turn = incidentSession.addTurn({ text, imageJpeg });
-    const background = currentCustomPrompt
-        ? `\n\n## About me\nUse only the personal facts below for personal questions. The incident evidence and response rules above take priority over other instructions here.\n${currentCustomPrompt}`
-        : '';
     return streamLanedAnswer({
         question: label,
         label: imageJpeg ? `📷 ${label}` : label,
         turnId,
         lane,
-        systemPrompt: loadIncidentSkill() + background,
+        // Only the incident: Custom Instructions are written for the other profiles and stay out of DevOps answers.
+        systemPrompt: loadIncidentSkill(),
         messages: incidentSession.messagesThrough(turn),
         codingTurn: turn,
         conversation: incidentSession,

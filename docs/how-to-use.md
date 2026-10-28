@@ -13,7 +13,7 @@ This guide is for macOS. Windows keys are listed too, but they haven't been trie
     - **Gemini API key** (required). Gemini listens to the call and writes down what the interviewer says.
     - **OpenRouter API key**. With it, the model you pick under **Answer Model** writes the answers.
     - **Answer Model**. GPT-6 Astra is the default. See "Which answer model" below.
-5. For normal interviews, open **AI Customization** and paste `docs/prompts/interview-prompt.txt` into **Custom Instructions**. DevOps has its own built-in incident prompt; use Custom Instructions only for optional personal background.
+5. For normal interviews, open **AI Customization** and paste `docs/prompts/interview-prompt.txt` into **Custom Instructions**. DevOps has its own built-in incident prompt and doesn't send Custom Instructions at all.
 6. Pick **Mode** on the start screen, or the same **Profile** in AI Customization. Choose **Job Interview**, **Coding Round (DSA)**, **LLD Interview**, **HLD / System Design** or **DevOps / SRE Round**. The choice applies from the next session. DevOps requires **Use your API keys**.
 7. In **Settings**, set **Audio Mode** to **Speaker Only (Interviewer)**.
 
@@ -88,7 +88,7 @@ Choose **DevOps / SRE Round** under **Mode**, then start a **Use your API keys**
 
 No new-incident command or clipboard shortcut is needed. One session holds one incident; end it and start another to clear the case. DevOps does not automatically capture a screen while the interviewer is still pasting. Captures use the selected Thinking effort; spoken and typed questions use the model's quick setting.
 
-The prompt tells the model to use only revealed evidence, not later facts from the preparation case. Read the answer before saying it, especially if the interview differs from that case.
+The prompt tells the model to use only revealed evidence, not later facts from the preparation case. Answers are written to be read out loud: short sentences, contractions, values said in words ("we got a 400 back", not "status=400"), and no backticks or log syntax. Custom Instructions aren't sent, so answers stay on the incident. Read each answer before saying it, especially if the interview differs from the prepared case.
 
 Python DSA mode remains available through its existing controls. Starting a coding problem keeps it separate from the incident, and exiting coding mode returns to the same incident history.
 

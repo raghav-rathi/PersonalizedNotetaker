@@ -40,9 +40,11 @@ test('a failed turn leaves the conversation, and a new problem starts empty', ()
     assert.deepEqual(session.messagesThrough(fresh), [{ role: 'user', text: 'NEW PROBLEM', imageJpeg: null }]);
 });
 
-test('an edited round prompt wins, and other profiles keep the DSA round', t => {
+test('the round picks its prompt, a copy in the settings folder wins, and other profiles keep the DSA round', t => {
     const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'round-prompt-'));
     t.after(() => fs.rmSync(configDir, { recursive: true, force: true }));
+    assert.match(loadCodingSkill('lld', configDir), /low-level design/i);
+    assert.match(loadCodingSkill('hld', configDir), /system design/i);
     assert.equal(loadCodingSkill('interview', configDir), loadCodingSkill('coding', configDir));
     const copy = ensureUserSkillFile('hld', configDir);
     fs.writeFileSync(copy, 'my edited HLD prompt');

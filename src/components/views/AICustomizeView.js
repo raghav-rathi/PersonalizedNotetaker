@@ -165,7 +165,7 @@ export class AICustomizeView extends LitElement {
                         this.selectedProfile === 'lld'
                             ? 'Optional: Java or Python, Amazon/Flipkart, any use cases they already sent...'
                             : this.selectedProfile === 'devops'
-                              ? 'Your background for small talk: years on call, your stack (AWS, Kubernetes, Terraform...), an outage you handled...'
+                              ? 'Not used in the DevOps / SRE Round. Kept for the other profiles.'
                               : 'Resume details, role requirements, constraints...'
                     }
                     .value=${this._context}
@@ -176,7 +176,7 @@ export class AICustomizeView extends LitElement {
                         this.selectedProfile === 'lld'
                             ? 'LLD coach is already in the profile. Put only language, company, or a pasted spec here.'
                             : this.selectedProfile === 'devops'
-                              ? 'Sent as context at session start. DevOps / SRE Round needs your own API keys (BYOK).'
+                              ? 'Not sent in the DevOps / SRE Round: its answers use only the incident. Kept for the other profiles. DevOps needs your own API keys (BYOK).'
                               : 'Sent as context at session start. Keep it short.'
                     }
                 </div>
