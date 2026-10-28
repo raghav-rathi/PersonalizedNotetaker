@@ -1,4 +1,5 @@
 import { html, css, LitElement } from '../../assets/lit-core-2.7.4.min.js';
+import { PROFILE_NAMES } from './profiles.js';
 
 export class AssistantView extends LitElement {
     static styles = css`
@@ -457,22 +458,15 @@ export class AssistantView extends LitElement {
     }
 
     getProfileNames() {
-        return {
-            interview: 'Job Interview',
-            coding: 'Coding Round (DSA)',
-            lld: 'LLD Interview (SDE-2)',
-            hld: 'HLD / System Design',
-            sales: 'Sales Call',
-            meeting: 'Tech Meeting',
-            presentation: 'Presentation',
-            negotiation: 'Negotiation',
-            exam: 'Exam Assistant',
-        };
+        return PROFILE_NAMES;
     }
 
     getPlaceholderText() {
         if (this.screen === 'side') return 'Answers to follow-up questions show up here.';
         const profileNames = this.getProfileNames();
+        if (this.selectedProfile === 'devops') {
+            return `Listening to your ${profileNames.devops}... Press Analyze Screen on each new log the interviewer shows. Follow-up answers show up under Follow-ups.`;
+        }
         return `Listening to your ${profileNames[this.selectedProfile] || 'session'}...`;
     }
 

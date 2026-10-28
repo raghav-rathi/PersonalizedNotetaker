@@ -13,8 +13,8 @@ This guide is for macOS. Windows keys are listed too, but they haven't been trie
     - **Gemini API key** (required). Gemini listens to the call and writes down what the interviewer says.
     - **OpenRouter API key**. With it, the model you pick under **Answer Model** writes the answers.
     - **Answer Model**. GPT-6 Astra is the default. See "Which answer model" below.
-5. Open **AI Customization** in the sidebar and paste `docs/prompts/interview-prompt.txt` into **Custom Instructions**. It holds your background and the way answers should sound.
-6. Still in **AI Customization**, pick the **Profile** for the round: **Job Interview** for normal questions, or **Coding Round (DSA)**, **LLD Interview** or **HLD / System Design**. The profile decides which prompt runs the `Cmd+Option+1` to `Cmd+Option+6` steps, and it applies from the next session.
+5. For normal interviews, open **AI Customization** and paste `docs/prompts/interview-prompt.txt` into **Custom Instructions**. DevOps has its own built-in incident prompt; use Custom Instructions only for optional personal background.
+6. Pick **Mode** on the start screen, or the same **Profile** in AI Customization. Choose **Job Interview**, **Coding Round (DSA)**, **LLD Interview**, **HLD / System Design** or **DevOps / SRE Round**. The choice applies from the next session. DevOps requires **Use your API keys**.
 7. In **Settings**, set **Audio Mode** to **Speaker Only (Interviewer)**.
 
 ## Starting a session
@@ -54,7 +54,7 @@ In meetings, your screen is attached only when the answer has to point at someth
 
 ## Screen context
 
-For every question, spoken or typed, in every profile, the app checks whether the answer needs what's on your screen right now. A small decision model, Jev, reads the words of the question (never the screen) and decides in about half a second, for a tiny fraction of a cent.
+Outside a DevOps incident, the app checks whether each spoken or typed question needs what's on your screen right now. A small decision model, Jev, reads the words of the question, never the screen, and decides in about half a second, for a tiny fraction of a cent. DevOps uses manual captures instead, as described below.
 
 - **Needs the screen** ("why a hashmap on line seven?", "see the error in the terminal?"): the app takes a screenshot at that moment and answers with it. The answer shows up about half a second later than usual.
 - **Something is being shared** ("I'm sharing a doc, open it"): nothing is shown. The next question in the following 2 minutes gets a screenshot taken when that question ends, so it sees the opened doc.
@@ -75,6 +75,24 @@ You don't need to press anything. When the interviewer finishes a question, the 
 - **Analyze Screen** (the ⚡ button, or `Cmd+Enter`) reads your screen and answers what's on it.
 
 Read every answer before you say it. The model can still add a detail that isn't in your background.
+
+## DevOps incident round
+
+Choose **DevOps / SRE Round** under **Mode**, then start a **Use your API keys** session. The Authd OCI skill is already adapted into `src/prompts/devops-skill.md`; don't paste the whole downloaded file into Custom Instructions.
+
+1. The interviewer asks the opening question. The app can answer the spoken question, or you can capture it if it is on screen.
+2. When the interviewer shows a log or another evidence card, press **Cmd+Enter** on Mac, **Ctrl+Enter** on Windows, or click **Analyze Screen**. If you changed the Analyze Screen key in Settings, use your saved key.
+3. Read the answer on **Main**. It explains what the evidence supports and ends with **ASK NEXT**, one evidence request to say to the interviewer.
+4. The interviewer supplies the next log, diff or metrics. Capture it the same way. The new answer keeps the earlier captures and replies in context.
+5. Spoken or typed follow-up questions get short answers on **Follow-ups**. Click **Main** to return to the evidence answer without changing it.
+
+No new-incident command or clipboard shortcut is needed. One session holds one incident; end it and start another to clear the case. DevOps does not automatically capture a screen while the interviewer is still pasting. Captures use the selected Thinking effort; spoken and typed questions use the model's quick setting.
+
+The prompt tells the model to use only revealed evidence, not later facts from the preparation case. Read the answer before saying it, especially if the interview differs from that case.
+
+Python DSA mode remains available through its existing controls. Starting a coding problem keeps it separate from the incident, and exiting coding mode returns to the same incident history.
+
+**Edit round prompt** in AI Customization opens the DevOps prompt. If you have a `devops-skill.md` copy from the older `devops-mode` branch in your settings folder, it takes priority. Remove that old copy to use this built-in capture-based version.
 
 ## A coding round, step by step
 

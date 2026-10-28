@@ -36,7 +36,7 @@ const { formatLiveAnswerText, formatAnswerForDisplay } = require('./answerFormat
 const { nextVoiceQuestion, questionText } = require('./questionMerge');
 const { streamOpenRouterAnswer, answerWithFallback, toGeminiContents, answerModelById } = require('./answerModel');
 const { LANE_INSTRUCTION, parseLaneHeader, splitSideUpdate, isReplaceableAnswer, resolveLane, isBackchannel } = require('./answerLanes');
-const { CODING_COMMANDS, EXIT_WORDS, NEW_PROBLEM_WORDS, loadCodingSkill, ensureUserSkillFile, CodingSession } = require('./codingSession');
+const { CODING_COMMANDS, EXIT_WORDS, NEW_PROBLEM_WORDS, loadCodingSkill, loadIncidentSkill, ensureUserSkillFile, CodingSession } = require('./codingSession');
 
 // Lazy-loaded to avoid circular dependency (localai.js imports from gemini.js)
 let _localai = null;
@@ -248,7 +248,7 @@ const liveTurnWatchdog = new LiveTurnWatchdog({
         liveStalledTurns++;
         stalledTurnPending = true;
         finalizeLiveConversationTurn();
-        sendToRenderer('update-status', 'Listening...');
+        showIdleStatus();
     },
 });
 global.getMeetingDiagnostics = () => {
@@ -348,6 +348,7 @@ function initializeNewSession(profile = null, customPrompt = null) {
     lastSummaryAt = 0;
     currentProfile = profile;
     currentCustomPrompt = customPrompt;
+    if (profile === 'devops' && textAnswersEnabled()) incidentSession.startProblem();
     startSessionArchive({
         sessionId: currentSessionId,
         profile,
@@ -482,8 +483,8 @@ function composeUserTurn(text) {
 // the model picked on the start screen, through OpenRouter, when that key is saved (answerModel.js),
 // otherwise Gemini Flash.
 // Answers go to one of two screens (answerLanes.js): the main screen keeps the answer being read and
-// counter-questions get the second screen. Coding mode (codingSession.js) runs the DSA skill as one
-// conversation per problem.
+// counter-questions get the second screen. Coding mode keeps a conversation per problem; DevOps keeps
+// a separate incident conversation across manual captures and spoken/typed follow-ups.
 const GEMINI_ANSWER_MODEL = 'gemini-3.8-flash';
 const ANSWER_MAX_OUTPUT_TOKENS = 8192;
 // 3.x sends the question transcript in snapshots; wait for it to settle before answering.
@@ -504,7 +505,7 @@ let liveInputTurnSeq = 0;
 let lastVoiceQuestion = null;
 // Set when a text answer fails, so Live's own spoken answer is shown for the turn instead.
 let liveAnswerFallbackPending = false;
-/** @typedef {{abort:AbortController, turnId:string, codingTurn:import('./codingSession').CodingTurn|null}} AnswerRequest */
+/** @typedef {{abort:AbortController, turnId:string, codingTurn:import('./codingSession').CodingTurn|null, conversation:CodingSession|null}} AnswerRequest */
 // Every running answer request, so a reset or a newer question can cancel it and stop its billing.
 /** @type {Set<AnswerRequest>} */
 const answerRequests = new Set();
@@ -512,7 +513,7 @@ const answerRequests = new Set();
 /** @type {{main: AnswerRequest|null, side: AnswerRequest|null}} */
 const laneRequests = { main: null, side: null };
 // What each card shows, so new speech knows whether it may still rewrite it.
-/** @type {Map<string, {lane:'main'|'side', text:string, firstTextAt:number, codingTurn:import('./codingSession').CodingTurn|null}>} */
+/** @type {Map<string, {lane:'main'|'side', text:string, firstTextAt:number, codingTurn:import('./codingSession').CodingTurn|null, conversation:CodingSession|null}>} */
 const answerCards = new Map();
 let hasMainCard = false;
 let mainQuestion = '';
@@ -537,6 +538,17 @@ let askSeq = 0;
 // Counts "new problem" requests, so a screenshot that finishes after a newer request or an exit is dropped.
 let codingProblemStart = 0;
 const codingSession = new CodingSession();
+const incidentSession = new CodingSession();
+
+function activeConversation() {
+    return codingSession.active ? codingSession : incidentSession.active ? incidentSession : null;
+}
+
+function showIdleStatus() {
+    if (!answerRequests.size) {
+        sendToRenderer('update-status', codingSession.active ? 'Coding mode' : incidentSession.active ? 'DevOps mode' : 'Listening...');
+    }
+}
 
 function textAnswersEnabled() {
     return currentProviderMode === 'byok';
@@ -579,7 +591,7 @@ function cancelRequest(request) {
 }
 
 function cancelCodingRequests() {
-    for (const request of [...answerRequests]) if (request.codingTurn) cancelRequest(request);
+    for (const request of [...answerRequests]) if (request.conversation === codingSession) cancelRequest(request);
 }
 
 function notifyCodingMode() {
@@ -601,6 +613,8 @@ function cancelTextAnswers() {
     screenShareAt = 0;
     waitingAsks.clear();
     codingProblemStart++;
+    incidentSession.stop();
+    incidentSession.turns = [];
     if (codingSession.active) {
         codingSession.stop();
         notifyCodingMode();
@@ -616,9 +630,9 @@ function scheduleAnswerForVoiceTurn() {
         answerTimer = null;
         if (lastVoiceQuestion?.turnSeq === turnSeq && lastVoiceQuestion.fragment === fragment) return;
         if (isBackchannel(fragment)) {
-            // "Okay" or "mm-hmm" needs no answer and must not join the question before it. Coding mode
-            // still logs it, since "yes" can confirm an assumption.
-            if (codingSession.active) codingSession.addTurn({ text: `they said: ${fragment}` }).reply = 'LANE: NONE';
+            // Even an acknowledgement can confirm an assumption in a coding problem or incident.
+            const conversation = activeConversation();
+            if (conversation) conversation.addTurn({ text: `they said: ${fragment}` }).reply = 'LANE: NONE';
             return;
         }
         lastVoiceQuestion = upcomingVoiceQuestion(fragment, turnSeq, () => createTurnId('answer'));
@@ -640,7 +654,7 @@ function upcomingVoiceQuestion(fragment, turnSeq, newTurnId) {
 function startEarlyScreenDecision(question) {
     earlyScreenDecision?.abort.abort();
     earlyScreenDecision = null;
-    if (getPreferences().autoScreenContext === false || !getOpenRouterApiKey()) return;
+    if (activeConversation() === incidentSession || getPreferences().autoScreenContext === false || !getOpenRouterApiKey()) return;
     const abort = new AbortController();
     earlyScreenDecision = { question, abort, decision: screenDecisionFor(question, false, abort.signal) };
 }
@@ -672,7 +686,9 @@ function answerSpokenQuestion(question, turnId) {
         send: (imageJpeg, depth) =>
             codingSession.active
                 ? sendCodingTurn({ text: `they said: ${question}`, label: question, turnId, imageJpeg, depth })
-                : sendNormalAnswer(question, { turnId, imageJpeg, depth }),
+                : incidentSession.active
+                  ? sendIncidentTurn({ text: `they said: ${question}`, label: question, turnId, depth })
+                  : sendNormalAnswer(question, { turnId, imageJpeg, depth }),
     });
 }
 
@@ -681,10 +697,10 @@ function cancelTurn(turnId) {
     for (const request of [...answerRequests]) {
         if (request.turnId !== turnId) continue;
         cancelRequest(request);
-        if (request.codingTurn) codingSession.removeTurn(request.codingTurn);
+        if (request.codingTurn) request.conversation?.removeTurn(request.codingTurn);
     }
-    const earlier = answerCards.get(turnId)?.codingTurn;
-    if (earlier) codingSession.removeTurn(earlier);
+    const earlier = answerCards.get(turnId);
+    if (earlier?.codingTurn) earlier.conversation?.removeTurn(earlier.codingTurn);
 }
 
 /**
@@ -701,6 +717,12 @@ async function askWithScreenContext({ question, turnId, typed, send }) {
     const reused = !typed && early?.question === question;
     if (early && !reused) early.abort.abort();
     const prefs = getPreferences();
+    // DevOps evidence arrives only through the user's capture action. Follow-ups reuse the incident,
+    // rather than racing an automatic capture of a log the interviewer has not finished pasting.
+    if (activeConversation() === incidentSession) {
+        early?.abort.abort();
+        return send(null, 'quick');
+    }
     const lastShot = lastScreenshotJpeg && needsVisualContext(question) ? lastScreenshotJpeg : null;
     if (prefs.autoScreenContext === false || !getOpenRouterApiKey()) {
         console.log('[screen] jev off, quick');
@@ -785,7 +807,7 @@ function markMainAnswer(question) {
  */
 function claimLane(request, lane, question) {
     if (lane === 'main') markMainAnswer(question);
-    if (request.codingTurn) return;
+    if (request.conversation === codingSession) return;
     const replaced = lane === 'main' ? [laneRequests.main, laneRequests.side] : [laneRequests.side];
     for (const old of replaced) if (old && old !== request) cancelRequest(old);
     if (lane === 'main') laneRequests.side = null;
@@ -803,7 +825,7 @@ function shortLabel(text, limit = 70) {
  * Streams one answer and puts it on a screen. The screen comes from the reply's LANE line unless
  * `lane` is given (hotkey commands always belong on the main screen).
  * @param {{question:string, label:string, turnId?:string, lane?:'main'|'side'|null, systemPrompt:string,
- *   messages:import('./answerModel').ChatMessage[], codingTurn?:import('./codingSession').CodingTurn|null,
+ *   messages:import('./answerModel').ChatMessage[], codingTurn?:import('./codingSession').CodingTurn|null, conversation?:CodingSession|null,
  *   depth?:import('./answerModel').AnswerDepth}} options
  */
 async function streamLanedAnswer({
@@ -814,13 +836,14 @@ async function streamLanedAnswer({
     systemPrompt,
     messages,
     codingTurn = null,
+    conversation = null,
     depth = 'think',
 }) {
     const apiKey = getApiKey();
     if (!apiKey || !question.trim()) return;
     const openRouterKey = getOpenRouterApiKey();
     /** @type {AnswerRequest} */
-    const request = { abort: new AbortController(), turnId, codingTurn };
+    const request = { abort: new AbortController(), turnId, codingTurn, conversation };
     answerRequests.add(request);
     const { signal } = request.abort;
     const sequenceBase = (answerSequenceBase += ANSWER_SEQUENCE_STEP);
@@ -832,7 +855,7 @@ async function streamLanedAnswer({
     let shown = '';
     let firstTextAt = 0;
 
-    const split = body => (codingTurn && lane === 'side' ? splitSideUpdate(body) : { answer: body, update: null });
+    const split = body => (conversation === codingSession && lane === 'side' ? splitSideUpdate(body) : { answer: body, update: null });
     const show = raw => {
         if (signal.aborted) return;
         if (codingTurn) codingTurn.reply = raw;
@@ -853,7 +876,7 @@ async function streamLanedAnswer({
             firstTextAt ||= Date.now();
             shown = formatAnswerForDisplay(answer);
             card.update(shown);
-            rememberCard(turnId, { lane, text: answer, firstTextAt, codingTurn });
+            rememberCard(turnId, { lane, text: answer, firstTextAt, codingTurn, conversation });
         }
         if (update?.trim()) {
             changedCard ||= createAnswerStream('update', {
@@ -903,15 +926,16 @@ async function streamLanedAnswer({
     // A trailing newline settles a reply too short to have finished its LANE line while streaming.
     if (!failure && result?.text.trim()) show(`${result.text}\n`);
     if (lane === 'none') {
-        // Nothing to answer. A coding turn keeps the remark in the conversation log.
+        // Keep the remark in the active conversation even when it needs no answer.
         if (codingTurn) codingTurn.reply = 'LANE: NONE';
         console.log(`[answer] no answer needed for "${shortLabel(question, 60)}"`);
-        if (!answerRequests.size) sendToRenderer('update-status', codingSession.active ? 'Coding mode' : 'Listening...');
+        showIdleStatus();
         return;
     }
     if (signal.aborted) return;
     if (failure || !result?.text.trim()) {
-        if (codingTurn) codingSession.removeTurn(codingTurn);
+        if (codingTurn && conversation === codingSession) conversation.removeTurn(codingTurn);
+        else if (codingTurn) codingTurn.reply = ''; // Keep incident evidence even if its answer failed.
         else liveAnswerFallbackPending = true;
         console.error('Text answer failed:', failure?.message || 'empty answer');
         sendToRenderer('update-status', `Answer failed: ${failure?.message || 'no text'}`);
@@ -928,9 +952,9 @@ async function streamLanedAnswer({
     const model = openRouterKey && !result.usedFallback ? answerModel.id : GEMINI_ANSWER_MODEL;
     const cost = result.cost ? `, $${result.cost.toFixed(4)}` : '';
     console.log(
-        `[answer] ${model} ${codingTurn ? 'coding' : currentProfile || 'interview'} ${lane} ${depth}: first text ${firstTextAt - startedAt} ms, done ${Date.now() - startedAt} ms${cost}`
+        `[answer] ${model} ${conversation === codingSession ? 'coding' : currentProfile || 'interview'} ${lane} ${depth}: first text ${firstTextAt - startedAt} ms, done ${Date.now() - startedAt} ms${cost}`
     );
-    if (!answerRequests.size) sendToRenderer('update-status', codingSession.active ? 'Coding mode' : 'Listening...');
+    showIdleStatus();
 }
 
 /** @param {string} question @param {{turnId?:string, imageJpeg?:string|null, depth?:import('./answerModel').AnswerDepth}} [options] */
@@ -963,6 +987,26 @@ function sendCodingTurn({ text, label, imageJpeg = null, turnId = createTurnId('
         systemPrompt: loadCodingSkill(currentProfile),
         messages: codingSession.messagesThrough(codingTurn),
         codingTurn,
+        conversation: codingSession,
+        depth,
+    });
+}
+
+/** @param {{text:string, label:string, imageJpeg?:string|null, turnId?:string, lane?:'main'|'side'|null, depth?:import('./answerModel').AnswerDepth}} turn */
+function sendIncidentTurn({ text, label, imageJpeg = null, turnId = createTurnId('incident'), lane = null, depth = 'think' }) {
+    const turn = incidentSession.addTurn({ text, imageJpeg });
+    const background = currentCustomPrompt
+        ? `\n\n## About me\nUse only the personal facts below for personal questions. The incident evidence and response rules above take priority over other instructions here.\n${currentCustomPrompt}`
+        : '';
+    return streamLanedAnswer({
+        question: label,
+        label: imageJpeg ? `📷 ${label}` : label,
+        turnId,
+        lane,
+        systemPrompt: loadIncidentSkill() + background,
+        messages: incidentSession.messagesThrough(turn),
+        codingTurn: turn,
+        conversation: incidentSession,
         depth,
     });
 }
@@ -970,11 +1014,17 @@ function sendCodingTurn({ text, label, imageJpeg = null, turnId = createTurnId('
 async function startCodingProblem(problemText = '') {
     const start = ++codingProblemStart;
     lastVoiceQuestion = null;
+    clearTimeout(answerTimer);
+    answerTimer = null;
+    waitingAsks.clear();
+    earlyScreenDecision?.abort.abort();
+    earlyScreenDecision = null;
     sendToRenderer('update-status', 'Reading the problem...');
     const shot = await captureScreenStill({ quality: 'medium' });
     // A second "new problem" or "exit" while the screenshot was taken wins.
     if (start !== codingProblemStart) return;
-    cancelCodingRequests();
+    // An incident answer or pending follow-up must not arrive over the new coding problem.
+    for (const request of [...answerRequests]) cancelRequest(request);
     codingSession.startProblem();
     notifyCodingMode();
     if (!shot.success) console.warn('Coding mode screenshot failed:', shot.error);
@@ -994,10 +1044,11 @@ function exitCodingMode() {
     codingProblemStart++;
     if (!codingSession.active) return;
     cancelCodingRequests();
+    waitingAsks.clear();
     codingSession.stop();
     lastVoiceQuestion = null;
     notifyCodingMode();
-    sendToRenderer('update-status', 'Coding mode off');
+    sendToRenderer('update-status', incidentSession.active ? 'Coding mode off, back to the incident' : 'Coding mode off');
 }
 
 /**
@@ -1440,7 +1491,7 @@ function handleLiveTurnComplete() {
     } else {
         waitForLateLiveTurn();
     }
-    sendToRenderer('update-status', 'Listening...');
+    showIdleStatus();
 }
 
 function handleLiveInterrupted() {
@@ -1457,7 +1508,7 @@ function handleLiveInterrupted() {
         liveAnswerFallbackPending = false;
     }
     resetLiveConversationBuffers();
-    sendToRenderer('update-status', 'Listening...');
+    showIdleStatus();
 }
 
 function resampleLive24kTo16k(inputBuffer) {
@@ -1695,8 +1746,8 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
     const enabledTools = await getEnabledTools();
     const googleSearchEnabled = enabledTools.some(tool => tool.googleSearch);
 
-    // Live only transcribes and re-bills its prompt every turn, so the meeting context goes to the answer model only.
-    const systemPrompt = getSystemPrompt(profile, profile === 'meeting' ? '' : customPrompt, googleSearchEnabled);
+    // Live only transcribes; meeting context and incident background go to the answer model only.
+    const systemPrompt = getSystemPrompt(profile, profile === 'meeting' || profile === 'devops' ? '' : customPrompt, googleSearchEnabled);
     currentSystemPrompt = systemPrompt; // Store for Groq
 
     // Initialize new conversation session only on first connect
@@ -2305,7 +2356,7 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
 
     ipcMain.handle('initialize-gemini', async (event, apiKey, customPrompt, profile = 'interview', language = 'en-US') => {
         currentProviderMode = 'byok';
-        warmScreenDecision();
+        if (profile !== 'devops') warmScreenDecision();
 
         // Gemini Live 3.8 conversational path (STT + overlay answer in one session)
         const session = await initializeGeminiSession(apiKey, customPrompt, profile, language);
@@ -2428,6 +2479,20 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
                 lastVoiceQuestion = null;
                 sendCodingTurn({ text: 'screen: This is my screen right now.', label: 'Analyze Screen', imageJpeg: data });
                 return { success: true, model: 'coding' };
+            }
+            if (incidentSession.active && textAnswersEnabled()) {
+                clearTimeout(answerTimer);
+                answerTimer = null;
+                lastVoiceQuestion = null;
+                const heard = currentTranscription.trim() || recentHeardText();
+                const text = [
+                    'screen: This is the latest evidence from the interviewer. Analyze what is new using the incident so far, then give one next evidence request.',
+                    heard ? `Recent interviewer speech, not additional screen evidence: ${heard}` : '',
+                ]
+                    .filter(Boolean)
+                    .join('\n');
+                sendIncidentTurn({ text, label: 'Analyze Screen', imageJpeg: data, lane: 'main' });
+                return { success: true, model: 'devops' };
             }
             sendToRenderer('update-status', 'Analyzing screen...');
             // Paths whose answer is saved through saveConversationTurn label it "Analyze Screen";
@@ -2557,7 +2622,9 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
             send: (imageJpeg, depth) =>
                 codingSession.active
                     ? sendCodingTurn({ text: `command: ${userText}`, label: userText, turnId, imageJpeg, depth })
-                    : sendNormalAnswer(userText, { turnId, imageJpeg, depth }),
+                    : incidentSession.active
+                      ? sendIncidentTurn({ text: `command: ${userText}`, label: userText, turnId, depth })
+                      : sendNormalAnswer(userText, { turnId, imageJpeg, depth }),
         });
         return { success: true };
     });

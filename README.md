@@ -20,7 +20,7 @@ A real-time AI assistant that provides contextual help during video calls, inter
 
 - **Live AI Assistance**: Real-time help powered by Google Gemini 2.0 Flash Live
 - **Screen & Audio Capture**: Analyzes what you see and hear for contextual responses
-- **Multiple Profiles**: Interview, Sales Call, Business Meeting, Presentation, Negotiation
+- **Multiple Profiles**: Interview, DSA, LLD, HLD, DevOps / SRE, Sales Call, Tech Meeting, Presentation, Negotiation
 - **Transparent Overlay**: Always-on-top window that can be positioned anywhere
 - **Click-through Mode**: Make window transparent to clicks when needed
 - **Cross-platform**: Works on macOS, Windows, and Linux (kinda, dont use, just for testing rn)
@@ -56,6 +56,12 @@ Live's own reply stays hidden unless both fail. If the interviewer pauses mid-qu
 ### Two answer screens
 
 The overlay has a **Main** screen and a **Follow-ups** screen, with tabs in the top bar. Main answers stay on Main. When the interviewer asks a follow-up or counter-question, a short answer appears on Follow-ups and the overlay jumps there. `Cmd+Option+Left` goes back to Main, to the same answer and scroll position, and `Cmd+Option+Right` opens Follow-ups again. Remarks such as "okay" or "mm-hmm" get no answer.
+
+### DevOps incident mode
+
+In **Use your API keys**, choose **DevOps / SRE Round** under **Mode**. Each time the interviewer shows a new log or evidence card, press `Cmd+Enter` on Mac, `Ctrl+Enter` on Windows, or click **Analyze Screen**. The answer appears on Main and ends with one request for the next evidence. Repeat the same capture action; earlier screenshots and answers stay in the incident conversation. Follow-up questions go to Follow-ups without replacing the main answer.
+
+The prompt in `src/prompts/devops-skill.md` follows the supplied Authd OCI preparation skill, including its rule against revealing evidence before the interviewer does. There are no extra incident or clipboard hotkeys. Python DSA mode still works separately, and exiting it returns to the incident. See [the DevOps workflow](docs/how-to-use.md#devops-incident-round).
 
 ### Coding mode
 

@@ -8,6 +8,7 @@ const { getConfigDir } = require('../storage');
 
 // The round picked in AI Customization decides which prompt runs the hotkey steps. Other profiles keep the DSA round.
 const ROUND_SKILLS = { coding: 'dsa-coding-skill.md', lld: 'lld-skill.md', hld: 'hld-skill.md' };
+const INCIDENT_SKILL = 'devops-skill.md';
 const BUILT_IN_SKILL_DIR = path.join(__dirname, '..', 'prompts');
 
 /** Hotkey commands, worded the way the skill expects them. */
@@ -36,7 +37,15 @@ function skillFileName(profile) {
  * @param {string|null|undefined} profile
  */
 function loadCodingSkill(profile, configDir = getConfigDir()) {
-    const name = skillFileName(profile);
+    return loadSkillFile(skillFileName(profile), configDir);
+}
+
+/** The incident prompt is separate, so coding hotkeys in DevOps still use the DSA prompt. */
+function loadIncidentSkill(configDir = getConfigDir()) {
+    return loadSkillFile(INCIDENT_SKILL, configDir);
+}
+
+function loadSkillFile(name, configDir) {
     let skillPath = path.join(configDir, name);
     let text;
     try {
@@ -46,7 +55,7 @@ function loadCodingSkill(profile, configDir = getConfigDir()) {
         skillPath = path.join(BUILT_IN_SKILL_DIR, name);
         text = fs.readFileSync(skillPath, 'utf8');
     }
-    if (skillPath !== loggedSkillPath) console.log(`Coding prompt: ${skillPath}`);
+    if (skillPath !== loggedSkillPath) console.log(`Round prompt: ${skillPath}`);
     loggedSkillPath = skillPath;
     return text;
 }
@@ -56,7 +65,7 @@ function loadCodingSkill(profile, configDir = getConfigDir()) {
  * @param {string|null|undefined} profile
  */
 function ensureUserSkillFile(profile, configDir = getConfigDir()) {
-    const name = skillFileName(profile);
+    const name = profile === 'devops' ? INCIDENT_SKILL : skillFileName(profile);
     const userPath = path.join(configDir, name);
     if (!fs.existsSync(userPath)) {
         fs.mkdirSync(configDir, { recursive: true });
@@ -119,4 +128,4 @@ class CodingSession {
     }
 }
 
-module.exports = { CODING_COMMANDS, EXIT_WORDS, NEW_PROBLEM_WORDS, loadCodingSkill, ensureUserSkillFile, CodingSession };
+module.exports = { CODING_COMMANDS, EXIT_WORDS, NEW_PROBLEM_WORDS, loadCodingSkill, loadIncidentSkill, ensureUserSkillFile, CodingSession };

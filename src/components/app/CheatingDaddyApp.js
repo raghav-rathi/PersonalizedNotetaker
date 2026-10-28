@@ -953,6 +953,8 @@ export class CheatingDaddyApp extends LitElement {
     async handleStart() {
         const prefs = await cheatingDaddy.storage.getPreferences();
         const providerMode = prefs.providerMode || 'cloud';
+        // The start screen already shows why: DevOps runs only on the BYOK session. This also covers the start hotkey.
+        if (this.selectedProfile === 'devops' && providerMode !== 'byok') return;
         const result = await this._ensureSessionController().start({ providerMode, preferences: prefs });
         if (!result.success) {
             this.setStatus(result.error || 'Meeting failed to start');
@@ -1282,6 +1284,7 @@ export class CheatingDaddyApp extends LitElement {
             coding: 'Coding Round',
             lld: 'LLD Interview',
             hld: 'HLD Interview',
+            devops: 'DevOps',
             sales: 'Sales Call',
             meeting: 'Tech Meeting',
             presentation: 'Presentation',

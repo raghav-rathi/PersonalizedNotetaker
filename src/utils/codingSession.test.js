@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { CodingSession, loadCodingSkill, ensureUserSkillFile } = require('./codingSession');
+const { CodingSession, loadCodingSkill, loadIncidentSkill, ensureUserSkillFile } = require('./codingSession');
 
 test('each turn sees the problem, every earlier reply so far, and its own message last', () => {
     const session = new CodingSession();
@@ -40,10 +40,9 @@ test('a failed turn leaves the conversation, and a new problem starts empty', ()
     assert.deepEqual(session.messagesThrough(fresh), [{ role: 'user', text: 'NEW PROBLEM', imageJpeg: null }]);
 });
 
-test('the round picks its prompt, a copy in the settings folder wins, and other profiles keep the DSA round', () => {
+test('an edited round prompt wins, and other profiles keep the DSA round', t => {
     const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'round-prompt-'));
-    assert.match(loadCodingSkill('lld', configDir), /low-level design/i);
-    assert.match(loadCodingSkill('hld', configDir), /system design/i);
+    t.after(() => fs.rmSync(configDir, { recursive: true, force: true }));
     assert.equal(loadCodingSkill('interview', configDir), loadCodingSkill('coding', configDir));
     const copy = ensureUserSkillFile('hld', configDir);
     fs.writeFileSync(copy, 'my edited HLD prompt');
@@ -51,4 +50,18 @@ test('the round picks its prompt, a copy in the settings folder wins, and other 
     // A second open keeps the edits.
     ensureUserSkillFile('hld', configDir);
     assert.equal(fs.readFileSync(copy, 'utf8'), 'my edited HLD prompt');
+});
+
+test('editing the incident prompt applies on the next read without changing the DSA prompt', t => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'incident-prompt-'));
+    t.after(() => fs.rmSync(configDir, { recursive: true, force: true }));
+    fs.writeFileSync(ensureUserSkillFile('coding', configDir), 'Use Python for my DSA round.');
+    const incidentPath = ensureUserSkillFile('devops', configDir);
+    fs.writeFileSync(incidentPath, 'Ask for the next evidence.');
+    assert.equal(loadIncidentSkill(configDir), 'Ask for the next evidence.');
+    assert.equal(loadCodingSkill('devops', configDir), 'Use Python for my DSA round.');
+    fs.writeFileSync(incidentPath, 'Use only the captured evidence.');
+    ensureUserSkillFile('devops', configDir);
+    assert.equal(loadIncidentSkill(configDir), 'Use only the captured evidence.');
+    assert.equal(loadCodingSkill('devops', configDir), 'Use Python for my DSA round.');
 });

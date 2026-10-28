@@ -1,5 +1,6 @@
 import { html, css, LitElement } from '../../assets/lit-core-2.7.4.min.js';
 import { inPageSelectStyles } from './selectStyles.js';
+import { PROFILES, PROFILE_NAMES } from './profiles.js';
 
 export class MainView extends LitElement {
     static styles = css`
@@ -503,6 +504,7 @@ export class MainView extends LitElement {
         _ollamaModel: { state: true },
         _whisperModel: { state: true },
         _showLocalHelp: { state: true },
+        _nextStepKey: { state: true },
     };
 
     constructor() {
@@ -527,6 +529,7 @@ export class MainView extends LitElement {
         this._ollamaHost = 'http://127.0.0.1:11434';
         this._ollamaModel = 'llama3.1';
         this._whisperModel = 'Xenova/whisper-small';
+        this._nextStepKey = navigator.platform.toUpperCase().indexOf('MAC') >= 0 ? 'Cmd+Enter' : 'Ctrl+Enter';
 
         this._animId = null;
         this._time = 0;
@@ -558,6 +561,10 @@ export class MainView extends LitElement {
             this._ollamaHost = prefs.ollamaHost || 'http://127.0.0.1:11434';
             this._ollamaModel = prefs.ollamaModel || 'llama3.1';
             this._whisperModel = prefs.whisperModel || 'Xenova/whisper-small';
+
+            // The DevOps hint names the Analyze Screen key the user actually saved.
+            const keybinds = await cheatingDaddy.storage.getKeybinds().catch(() => null);
+            if (keybinds && typeof keybinds.nextStep === 'string') this._nextStepKey = keybinds.nextStep;
 
             this.requestUpdate();
         } catch (e) {
@@ -770,10 +777,26 @@ export class MainView extends LitElement {
         this.onProfileChange(e.target.value);
     }
 
+    _modeHint() {
+        if (this.selectedProfile !== 'devops') return 'What the answers are for. The same choice as Profile in AI Context.';
+        const capture = this._nextStepKey ? `${this._nextStepKey} or the Analyze Screen button` : 'the Analyze Screen button';
+        return `Answers like an on-call engineer and keeps one incident going for the whole session. Each time the interviewer shows a new log, capture it with ${capture}. Ask follow-ups out loud or type them; those answers land under Follow-ups. Coding shortcuts still solve DSA questions.`;
+    }
+
+    // DevOps keeps the incident on the BYOK session only, so cloud and local would start a different kind of session.
+    _devopsNeedsByok() {
+        return this.selectedProfile === 'devops' && this._mode !== 'byok';
+    }
+
+    _renderDevopsWarning() {
+        if (!this._devopsNeedsByok()) return '';
+        return html`<div class="help-warn">${PROFILE_NAMES.devops} needs your own API keys. Switch to BYOK or pick another profile in AI Context.</div>`;
+    }
+
     // ── Start ──
 
     _handleStart() {
-        if (this.isInitializing) return;
+        if (this.isInitializing || this._devopsNeedsByok()) return;
 
         if (this._mode === 'cloud') {
             if (!this._token.trim()) {
@@ -861,6 +884,7 @@ export class MainView extends LitElement {
                 <div class="form-hint">DM soham to get your invite code</div>
             </div>
 
+            ${this._renderDevopsWarning()}
             ${this._renderStartButton()}
             ${this._renderDivider()}
 
@@ -881,6 +905,17 @@ export class MainView extends LitElement {
 
     _renderByokMode() {
         return html`
+            <div class="form-group">
+                <label class="form-label">Mode</label>
+                <select
+                    .value=${this.selectedProfile}
+                    @change=${e => this._handleProfileChange(e)}
+                >
+                    ${PROFILES.map(profile => html`<option value=${profile.value} ?selected=${this.selectedProfile === profile.value}>${profile.label}</option>`)}
+                </select>
+                <div class="form-hint">${this._modeHint()}</div>
+            </div>
+
             <div class="form-group">
                 <label class="form-label">Gemini API Key</label>
                 <input
@@ -927,7 +962,7 @@ export class MainView extends LitElement {
                 >
                     ${window.require('./utils/answerModel').THINKING_EFFORTS.map(effort => html`<option value=${effort.id} ?selected=${this._reasoningEffort === effort.id}>${effort.label}</option>`)}
                 </select>
-                <div class="form-hint">How hard the answer model thinks on a new problem, code, a dry run and the coding hotkeys. Higher is slower to start. Small talk and follow-ups stay quick. Applies from the next session.</div>
+                <div class="form-hint">How hard the answer model thinks on coding steps and DevOps screen captures. Higher is slower to start. Small talk and follow-ups stay quick. Applies from the next session.</div>
             </div>
 
             <div class="form-group">
@@ -1004,6 +1039,7 @@ export class MainView extends LitElement {
                 <div class="form-hint">${this.whisperDownloading ? 'Downloading model...' : 'Downloaded automatically on first use'}</div>
             </div>
 
+            ${this._renderDevopsWarning()}
             ${this._renderStartButton()}
             ${this._renderDivider()}
 
