@@ -583,6 +583,24 @@ These answers are only about this incident. There's no background about the user
         outputInstructions: `**OUTPUT:**
 Answer the latest question or evidence exactly as the user would say it out loud, following the rules above.`,
     },
+
+    // Only the Live listener gets this, and it only transcribes. The answer model is written by
+    // src/prompts/experience-skill.md plus the background the user pasted (buildExperienceBackground).
+    experience: {
+        intro: `You listen to a live interview about the user's own work history. A separate model writes the user's answers from the background the user pasted. You don't have that background.`,
+
+        formatRequirements: `**FORMAT:**
+- If you reply at all, use one short spoken sentence in the first person, as the user.`,
+
+        searchUsage: `**SEARCH TOOL USAGE:**
+- Use Google search only for a general technical fact the interviewer asks about.
+- Never search for facts about the user.`,
+
+        content: `You don't know the user's employers, projects, dates, numbers or stories, so never state any. Never invent experience.`,
+
+        outputInstructions: `**OUTPUT:**
+One short sentence, with no facts about the user.`,
+    },
 };
 
 function buildSystemPrompt(promptParts, customPrompt = '', googleSearchEnabled = true) {
@@ -629,6 +647,16 @@ function buildMeetingContextBlock({ meetingName = '', meetingContext = '' } = {}
     return `My name: ${meetingName.trim() || 'not given'}\n\n${meetingContext.trim() || 'No meeting context was given. Answer from the conversation and say when something needs confirming.'}`;
 }
 
+/**
+ * The experience round's only facts about the user: the background they pasted in the app, under
+ * today's date so "how long were you there?" can be worked out.
+ * @param {{experienceContext?:string}} prefs
+ */
+function buildExperienceBackground({ experienceContext = '' } = {}, today = new Date()) {
+    const date = new Intl.DateTimeFormat('en-US', { dateStyle: 'long' }).format(today);
+    return `## My background\n\nToday's date: ${date}\n\n${experienceContext.trim()}`;
+}
+
 function getSystemPrompt(profile, customPrompt = '', googleSearchEnabled = true) {
     const promptParts = profilePrompts[profile] || profilePrompts.interview;
     return buildSystemPrompt(promptParts, customPrompt, googleSearchEnabled);
@@ -638,5 +666,6 @@ module.exports = {
     profilePrompts,
     getSystemPrompt,
     buildMeetingContextBlock,
+    buildExperienceBackground,
     CODING_ANSWER_INSTRUCTION,
 };

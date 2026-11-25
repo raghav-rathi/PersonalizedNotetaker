@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { CodingSession, loadCodingSkill, loadIncidentSkill, ensureUserSkillFile } = require('./codingSession');
+const { CodingSession, loadCodingSkill, loadSessionSkill, ensureUserSkillFile } = require('./codingSession');
 
 test('each turn sees the problem, every earlier reply so far, and its own message last', () => {
     const session = new CodingSession();
@@ -54,16 +54,22 @@ test('the round picks its prompt, a copy in the settings folder wins, and other 
     assert.equal(fs.readFileSync(copy, 'utf8'), 'my edited HLD prompt');
 });
 
-test('editing the incident prompt applies on the next read without changing the DSA prompt', t => {
-    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'incident-prompt-'));
+test('editing a session round prompt applies on the next read, and leaves the DSA prompt and the other round alone', t => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'session-round-prompt-'));
     t.after(() => fs.rmSync(configDir, { recursive: true, force: true }));
     fs.writeFileSync(ensureUserSkillFile('coding', configDir), 'Use Python for my DSA round.');
     const incidentPath = ensureUserSkillFile('devops', configDir);
+    const experiencePath = ensureUserSkillFile('experience', configDir);
+    assert.notEqual(incidentPath, experiencePath);
     fs.writeFileSync(incidentPath, 'Ask for the next evidence.');
-    assert.equal(loadIncidentSkill(configDir), 'Ask for the next evidence.');
-    assert.equal(loadCodingSkill('devops', configDir), 'Use Python for my DSA round.');
+    fs.writeFileSync(experiencePath, 'Answer from my background.');
+    assert.equal(loadSessionSkill('devops', configDir), 'Ask for the next evidence.');
+    assert.equal(loadSessionSkill('experience', configDir), 'Answer from my background.');
     fs.writeFileSync(incidentPath, 'Use only the captured evidence.');
+    // A second open keeps the edits.
     ensureUserSkillFile('devops', configDir);
-    assert.equal(loadIncidentSkill(configDir), 'Use only the captured evidence.');
-    assert.equal(loadCodingSkill('devops', configDir), 'Use Python for my DSA round.');
+    ensureUserSkillFile('experience', configDir);
+    assert.equal(loadSessionSkill('devops', configDir), 'Use only the captured evidence.');
+    assert.equal(loadSessionSkill('experience', configDir), 'Answer from my background.');
+    for (const profile of ['devops', 'experience']) assert.equal(loadCodingSkill(profile, configDir), 'Use Python for my DSA round.');
 });

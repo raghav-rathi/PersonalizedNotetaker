@@ -505,6 +505,7 @@ export class MainView extends LitElement {
         _whisperModel: { state: true },
         _showLocalHelp: { state: true },
         _nextStepKey: { state: true },
+        _experienceContext: { state: true },
     };
 
     constructor() {
@@ -530,6 +531,7 @@ export class MainView extends LitElement {
         this._ollamaModel = 'llama3.1';
         this._whisperModel = 'Xenova/whisper-small';
         this._nextStepKey = navigator.platform.toUpperCase().indexOf('MAC') >= 0 ? 'Cmd+Enter' : 'Ctrl+Enter';
+        this._experienceContext = '';
 
         this._animId = null;
         this._time = 0;
@@ -561,6 +563,9 @@ export class MainView extends LitElement {
             this._ollamaHost = prefs.ollamaHost || 'http://127.0.0.1:11434';
             this._ollamaModel = prefs.ollamaModel || 'llama3.1';
             this._whisperModel = prefs.whisperModel || 'Xenova/whisper-small';
+
+            // The experience round can't start without the background it answers from.
+            this._experienceContext = prefs.experienceContext || '';
 
             // The DevOps hint names the Analyze Screen key the user actually saved.
             const keybinds = await cheatingDaddy.storage.getKeybinds().catch(() => null);
@@ -778,25 +783,33 @@ export class MainView extends LitElement {
     }
 
     _modeHint() {
+        if (this.selectedProfile === 'experience') {
+            return 'Answers questions about your own work, only from the background you paste under AI Customization, and keeps the whole interview in one conversation so answers stay consistent. A fact that is missing shows as FILL IN. No coding or incident steps.';
+        }
         if (this.selectedProfile !== 'devops') return 'What the answers are for. The same choice as Profile in AI Context.';
         const capture = this._nextStepKey ? `${this._nextStepKey} or the Analyze Screen button` : 'the Analyze Screen button';
         return `Answers like an on-call engineer and keeps one incident going for the whole session. Each time the interviewer shows a new log, capture it with ${capture}. Ask follow-ups out loud or type them; those answers land under Follow-ups. Coding shortcuts still solve DSA questions.`;
     }
 
-    // DevOps keeps the incident on the BYOK session only, so cloud and local would start a different kind of session.
-    _devopsNeedsByok() {
-        return this.selectedProfile === 'devops' && this._mode !== 'byok';
+    // A session round runs on the BYOK session only, and the experience round needs the background it answers from.
+    _startBlocker() {
+        return window.require('./utils/sessionRounds').startBlocker({
+            profile: this.selectedProfile,
+            name: PROFILE_NAMES[this.selectedProfile],
+            providerMode: this._mode,
+            experienceContext: this._experienceContext,
+        });
     }
 
-    _renderDevopsWarning() {
-        if (!this._devopsNeedsByok()) return '';
-        return html`<div class="help-warn">${PROFILE_NAMES.devops} needs your own API keys. Switch to BYOK or pick another profile in AI Context.</div>`;
+    _renderStartWarning() {
+        const reason = this._startBlocker();
+        return reason ? html`<div class="help-warn">${reason}</div>` : '';
     }
 
     // ── Start ──
 
     _handleStart() {
-        if (this.isInitializing || this._devopsNeedsByok()) return;
+        if (this.isInitializing || this._startBlocker()) return;
 
         if (this._mode === 'cloud') {
             if (!this._token.trim()) {
@@ -884,7 +897,7 @@ export class MainView extends LitElement {
                 <div class="form-hint">DM soham to get your invite code</div>
             </div>
 
-            ${this._renderDevopsWarning()}
+            ${this._renderStartWarning()}
             ${this._renderStartButton()}
             ${this._renderDivider()}
 
@@ -978,6 +991,7 @@ export class MainView extends LitElement {
                 </div>
             </div>
 
+            ${this._renderStartWarning()}
             ${this._renderStartButton()}
             ${this._renderDivider()}
 
@@ -1039,7 +1053,7 @@ export class MainView extends LitElement {
                 <div class="form-hint">${this.whisperDownloading ? 'Downloading model...' : 'Downloaded automatically on first use'}</div>
             </div>
 
-            ${this._renderDevopsWarning()}
+            ${this._renderStartWarning()}
             ${this._renderStartButton()}
             ${this._renderDivider()}
 

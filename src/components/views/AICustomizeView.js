@@ -42,6 +42,7 @@ export class AICustomizeView extends LitElement {
         _context: { state: true },
         _meetingName: { state: true },
         _meetingContext: { state: true },
+        _experienceContext: { state: true },
         _promptStatus: { state: true },
     };
 
@@ -52,6 +53,7 @@ export class AICustomizeView extends LitElement {
         this._context = '';
         this._meetingName = 'Bharat';
         this._meetingContext = '';
+        this._experienceContext = '';
         this._promptStatus = '';
         this._loadFromStorage();
     }
@@ -62,6 +64,7 @@ export class AICustomizeView extends LitElement {
             this._context = prefs.customPrompt || '';
             this._meetingName = prefs.meetingName ?? 'Bharat';
             this._meetingContext = prefs.meetingContext || '';
+            this._experienceContext = prefs.experienceContext || '';
             this.requestUpdate();
         } catch (error) {
             console.error('Error loading AI customize storage:', error);
@@ -81,6 +84,19 @@ export class AICustomizeView extends LitElement {
     async _saveMeeting(key, val) {
         this[key === 'meetingName' ? '_meetingName' : '_meetingContext'] = val;
         await cheatingDaddy.storage.updatePreference(key, val);
+    }
+
+    // The experience round answers only from this text, so it's kept apart from Custom Instructions.
+    async _saveExperience(val) {
+        this._experienceContext = val;
+        await cheatingDaddy.storage.updatePreference('experienceContext', val);
+    }
+
+    _roundPromptRole() {
+        if (this.selectedProfile === 'devops') return 'Writes every DevOps answer. The coding shortcuts keep the DSA round prompt.';
+        if (this.selectedProfile === 'experience')
+            return 'The rules every answer in this round follows: facts only from your background, and how it should sound.';
+        return 'Runs the ⌘⌥1 to ⌘⌥6 steps.';
     }
 
     async _openRoundPrompt() {
@@ -105,20 +121,13 @@ export class AICustomizeView extends LitElement {
                                 </select>
                             </div>
                             ${
-                                ['coding', 'lld', 'hld', 'devops'].includes(this.selectedProfile)
+                                ['coding', 'lld', 'hld', 'devops', 'experience'].includes(this.selectedProfile)
                                     ? html`<div class="form-group">
                                               <label class="form-label">Round Prompt</label>
                                               <button class="control" type="button" @click=${() => this._openRoundPrompt()}>Edit round prompt</button>
                                           </div>
                                           <div class="form-help">
-                                              ${
-                                                  this._promptStatus ||
-                                                  `${
-                                                      this.selectedProfile === 'devops'
-                                                          ? 'Writes every DevOps answer. The coding shortcuts keep the DSA round prompt.'
-                                                          : 'Runs the ⌘⌥1 to ⌘⌥6 steps.'
-                                                  } Edits apply from the next reply, no rebuild or restart.`
-                                              }
+                                              ${this._promptStatus || `${this._roundPromptRole()} Edits apply from the next reply, no rebuild or restart.`}
                                           </div>`
                                     : ''
                             }
@@ -146,10 +155,31 @@ export class AICustomizeView extends LitElement {
                                                   apply from the next answer.
                                               </div>
                                           </div>`
-                                    : this._renderCustomInstructions()
+                                    : this.selectedProfile === 'experience'
+                                      ? this._renderBackground()
+                                      : this._renderCustomInstructions()
                             }
                         </div>
                     </section>
+                </div>
+            </div>
+        `;
+    }
+
+    _renderBackground() {
+        const words = this._experienceContext.trim().split(/\s+/).filter(Boolean).length;
+        return html`
+            <div class="form-group vertical">
+                <label class="form-label">My background</label>
+                <textarea
+                    class="control"
+                    placeholder="Paste your resume, then every project: what it was for, your part, the stack, the real numbers, what went wrong and why you made each choice. Add anything else they can ask about."
+                    .value=${this._experienceContext}
+                    @input=${e => this._saveExperience(e.target.value)}
+                ></textarea>
+                <div class="form-help">
+                    ${words ? `${words.toLocaleString()} words. ` : ''}Answers about you use only these facts. A fact that's missing shows up as FILL
+                    IN, never as a guess, and you can type it into the overlay during the interview. Custom Instructions aren't sent in this round.
                 </div>
             </div>
         `;

@@ -23,8 +23,9 @@ function formatLiveAnswerText(text) {
 }
 
 // Script labels are for the model, not the reader. SAY/SPEAK/WRITE disappear (paragraphs are spoken,
-// code blocks are typed), and cues such as LISTEN or LINE COACH become the small accent labels that
-// AssistantView styles from a leading <strong>.
+// code blocks are typed), and cues such as LISTEN, LINE COACH or FILL IN (a fact the experience round
+// couldn't find in the user's background) become the small accent labels that AssistantView styles
+// from a leading <strong>.
 /** Matches a label at line start in any of SAY: / **SAY**: / **SAY:** forms. */
 const label = name => new RegExp(String.raw`^(\s*)(?:\*\*)?(?:${name})(?:\*\*)?\s*:(?:\*\*)?\s*`, 'i');
 const DISPLAY_LABELS = [
@@ -34,6 +35,7 @@ const DISPLAY_LABELS = [
     [label('CODE'), '$1**Code** '],
     [label('LINE COACH'), '$1**Line coach** '],
     [label('COMPLEXITY'), '$1**Complexity** '],
+    [label('FILL IN'), '$1**Fill in** '],
 ];
 
 /** @param {string} text */

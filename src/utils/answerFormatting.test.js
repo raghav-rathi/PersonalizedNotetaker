@@ -31,6 +31,7 @@ test('script labels outside code become reading cues, and code blocks stay exact
         '```',
         'LISTEN: for their answer',
         '**ACTION:** replace line 3',
+        'FILL IN: the team size',
     ].join('\n');
     assert.equal(
         formatAnswerForDisplay(reply),
@@ -42,6 +43,7 @@ test('script labels outside code become reading cues, and code blocks stay exact
             '```',
             '**Listen** for their answer',
             '**Edit** replace line 3',
+            '**Fill in** the team size',
         ].join('\n')
     );
 });

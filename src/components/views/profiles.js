@@ -1,6 +1,7 @@
 // The kinds of session, as the start screen's Mode and AI Context's Profile list them.
 export const PROFILES = [
     { value: 'interview', label: 'Job Interview' },
+    { value: 'experience', label: 'Experience / Resume Round' },
     { value: 'coding', label: 'Coding Round (DSA)' },
     { value: 'lld', label: 'LLD Interview (SDE-2)' },
     { value: 'hld', label: 'HLD / System Design' },

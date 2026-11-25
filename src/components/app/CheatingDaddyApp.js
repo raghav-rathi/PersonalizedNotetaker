@@ -7,6 +7,7 @@ import { AssistantView } from '../views/AssistantView.js';
 import { OnboardingView } from '../views/OnboardingView.js';
 import { AICustomizeView } from '../views/AICustomizeView.js';
 import { FeedbackView } from '../views/FeedbackView.js';
+import { PROFILE_NAMES } from '../views/profiles.js';
 
 // Older cards are dropped past this many, so a long meeting doesn't keep growing the overlay.
 const MAX_ANSWER_CARDS = 100;
@@ -953,8 +954,14 @@ export class CheatingDaddyApp extends LitElement {
     async handleStart() {
         const prefs = await cheatingDaddy.storage.getPreferences();
         const providerMode = prefs.providerMode || 'cloud';
-        // The start screen already shows why: DevOps runs only on the BYOK session. This also covers the start hotkey.
-        if (this.selectedProfile === 'devops' && providerMode !== 'byok') return;
+        // The start screen already shows why a session round can't start yet. This also covers the start hotkey.
+        const blocked = window.require('./utils/sessionRounds').startBlocker({
+            profile: this.selectedProfile,
+            name: PROFILE_NAMES[this.selectedProfile],
+            providerMode,
+            experienceContext: prefs.experienceContext,
+        });
+        if (blocked) return;
         const result = await this._ensureSessionController().start({ providerMode, preferences: prefs });
         if (!result.success) {
             this.setStatus(result.error || 'Meeting failed to start');
@@ -1281,6 +1288,7 @@ export class CheatingDaddyApp extends LitElement {
 
         const profileLabels = {
             interview: 'Interview',
+            experience: 'Experience',
             coding: 'Coding Round',
             lld: 'LLD Interview',
             hld: 'HLD Interview',

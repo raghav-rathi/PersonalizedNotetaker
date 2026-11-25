@@ -39,6 +39,8 @@ const DEFAULT_PREFERENCES = {
     // The Tech Meeting profile answers from this name and context, edited in the app (AI Customization or the overlay).
     meetingName: 'Bharat',
     meetingContext: '',
+    // The Experience / Resume Round answers only from this text: the resume, projects and history pasted in AI Customization.
+    experienceContext: '',
 };
 
 const DEFAULT_KEYBINDS = null; // null means use system defaults

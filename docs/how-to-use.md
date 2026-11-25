@@ -13,8 +13,8 @@ This guide is for macOS. Windows keys are listed too, but they haven't been trie
     - **Gemini API key** (required). Gemini listens to the call and writes down what the interviewer says.
     - **OpenRouter API key**. With it, the model you pick under **Answer Model** writes the answers.
     - **Answer Model**. GPT-6 Astra is the default. See "Which answer model" below.
-5. For normal interviews, open **AI Customization** and paste `docs/prompts/interview-prompt.txt` into **Custom Instructions**. DevOps has its own built-in incident prompt and doesn't send Custom Instructions at all.
-6. Pick **Mode** on the start screen, or the same **Profile** in AI Customization. Choose **Job Interview**, **Coding Round (DSA)**, **LLD Interview**, **HLD / System Design** or **DevOps / SRE Round**. The choice applies from the next session. DevOps requires **Use your API keys**.
+5. For normal interviews, open **AI Customization** and paste `docs/prompts/interview-prompt.txt` into **Custom Instructions**. DevOps and the Experience / Resume Round have their own built-in prompts and don't send Custom Instructions at all.
+6. Pick **Mode** on the start screen, or the same **Profile** in AI Customization. Choose **Job Interview**, **Experience / Resume Round**, **Coding Round (DSA)**, **LLD Interview**, **HLD / System Design** or **DevOps / SRE Round**. The choice applies from the next session. DevOps and the Experience / Resume Round require **Use your API keys**.
 7. In **Settings**, set **Audio Mode** to **Speaker Only (Interviewer)**.
 
 ## Starting a session
@@ -75,6 +75,30 @@ You don't need to press anything. When the interviewer finishes a question, the 
 - **Analyze Screen** (the ⚡ button, or `Cmd+Enter`) reads your screen and answers what's on it.
 
 Read every answer before you say it. The model can still add a detail that isn't in your background.
+
+## Experience / resume round
+
+Use this when the interview is about your own work: your jobs, your projects, and technical questions about the things in them.
+
+1. Open **AI Customization** and set **Profile** to **Experience / Resume Round**.
+2. Paste your background into **My background**: your resume, then every project. For each project, say what it was for, your part, the stack, the real numbers, what went wrong and why you made each choice. Add anything else they can ask about, such as your notice period or why you're looking.
+3. On the start screen, pick the same **Mode** and start a **Use your API keys** session. The app won't start this mode with an empty background.
+4. Answer questions as they come. A new question goes to **Main**. A short follow-up goes to **Follow-ups**.
+
+How it differs from Job Interview:
+
+- Facts about you come only from **My background**. Custom Instructions aren't sent.
+- The whole interview is one conversation, so the model sees everything it already told you to say.
+- When the interviewer asks for a fact that isn't in your background, the answer starts with **FILL IN**, which names what's missing. The text to say has a gap in square brackets, like `There were [team size] of us`. Say the real thing there. You can also type the fact into the overlay, for example `my team was 6 people`, and later answers use it.
+- A technical question about your stack gets a normal spoken answer. It ties in your project in one sentence when your background has a matching fact.
+- The screen is read only when you press **Analyze Screen**, for example when the interviewer pastes a question into the chat.
+- The coding shortcuts still start the DSA round if you press them. Nothing in this mode needs them.
+
+The more specific your background is, the better the answers. "Improved performance" gives the model nothing to say. "Cut the slowest query from 14 seconds to 900 ms by adding an index" does.
+
+**Edit round prompt** in AI Customization opens the rules this mode follows, `experience-skill.md`. Edits apply from the next answer. Settings are per machine, so paste your background again on each computer.
+
+Read every answer before you say it. The model follows these rules most of the time, not every time. In testing it still added a small detail now and then that wasn't in the background.
 
 ## DevOps incident round
 

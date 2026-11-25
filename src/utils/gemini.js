@@ -2,7 +2,7 @@ const { GoogleGenAI, ThinkingLevel } = require('@google/genai');
 const { BrowserWindow, ipcMain, net, shell } = require('electron');
 const { spawn } = require('child_process');
 const { saveDebugAudio } = require('../audioUtils');
-const { getSystemPrompt, buildMeetingContextBlock, CODING_ANSWER_INSTRUCTION } = require('./prompts');
+const { getSystemPrompt, buildMeetingContextBlock, buildExperienceBackground, CODING_ANSWER_INSTRUCTION } = require('./prompts');
 const {
     getApiKey,
     getGroqApiKey,
@@ -36,7 +36,8 @@ const { formatLiveAnswerText, formatAnswerForDisplay } = require('./answerFormat
 const { nextVoiceQuestion, questionText } = require('./questionMerge');
 const { streamOpenRouterAnswer, answerWithFallback, toGeminiContents, answerModelById } = require('./answerModel');
 const { LANE_INSTRUCTION, parseLaneHeader, splitSideUpdate, isReplaceableAnswer, resolveLane, isBackchannel } = require('./answerLanes');
-const { CODING_COMMANDS, EXIT_WORDS, NEW_PROBLEM_WORDS, loadCodingSkill, loadIncidentSkill, ensureUserSkillFile, CodingSession } = require('./codingSession');
+const { CODING_COMMANDS, EXIT_WORDS, NEW_PROBLEM_WORDS, loadCodingSkill, loadSessionSkill, ensureUserSkillFile, CodingSession } = require('./codingSession');
+const { isSessionRound } = require('./sessionRounds');
 
 // Lazy-loaded to avoid circular dependency (localai.js imports from gemini.js)
 let _localai = null;
@@ -348,7 +349,7 @@ function initializeNewSession(profile = null, customPrompt = null) {
     lastSummaryAt = 0;
     currentProfile = profile;
     currentCustomPrompt = customPrompt;
-    if (profile === 'devops' && textAnswersEnabled()) incidentSession.startProblem();
+    if (isSessionRound(profile) && textAnswersEnabled()) roundSession.startProblem();
     startSessionArchive({
         sessionId: currentSessionId,
         profile,
@@ -483,8 +484,9 @@ function composeUserTurn(text) {
 // the model picked on the start screen, through OpenRouter, when that key is saved (answerModel.js),
 // otherwise Gemini Flash.
 // Answers go to one of two screens (answerLanes.js): the main screen keeps the answer being read and
-// counter-questions get the second screen. Coding mode keeps a conversation per problem; DevOps keeps
-// a separate incident conversation across manual captures and spoken/typed follow-ups.
+// counter-questions get the second screen. Coding mode keeps a conversation per problem. A session round
+// keeps one for the whole session: the DevOps incident across manual captures and spoken or typed
+// follow-ups, or the experience interview, answered from the background the user pasted.
 const GEMINI_ANSWER_MODEL = 'gemini-3.8-flash';
 const ANSWER_MAX_OUTPUT_TOKENS = 8192;
 // 3.x sends the question transcript in snapshots; wait for it to settle before answering.
@@ -538,15 +540,16 @@ let askSeq = 0;
 // Counts "new problem" requests, so a screenshot that finishes after a newer request or an exit is dropped.
 let codingProblemStart = 0;
 const codingSession = new CodingSession();
-const incidentSession = new CodingSession();
+const roundSession = new CodingSession();
 
 function activeConversation() {
-    return codingSession.active ? codingSession : incidentSession.active ? incidentSession : null;
+    return codingSession.active ? codingSession : roundSession.active ? roundSession : null;
 }
 
 function showIdleStatus() {
     if (!answerRequests.size) {
-        sendToRenderer('update-status', codingSession.active ? 'Coding mode' : incidentSession.active ? 'DevOps mode' : 'Listening...');
+        const listening = roundSession.active && currentProfile === 'devops' ? 'DevOps mode' : 'Listening...';
+        sendToRenderer('update-status', codingSession.active ? 'Coding mode' : listening);
     }
 }
 
@@ -613,8 +616,8 @@ function cancelTextAnswers() {
     screenShareAt = 0;
     waitingAsks.clear();
     codingProblemStart++;
-    incidentSession.stop();
-    incidentSession.turns = [];
+    roundSession.stop();
+    roundSession.turns = [];
     if (codingSession.active) {
         codingSession.stop();
         notifyCodingMode();
@@ -654,7 +657,7 @@ function upcomingVoiceQuestion(fragment, turnSeq, newTurnId) {
 function startEarlyScreenDecision(question) {
     earlyScreenDecision?.abort.abort();
     earlyScreenDecision = null;
-    if (activeConversation() === incidentSession || getPreferences().autoScreenContext === false || !getOpenRouterApiKey()) return;
+    if (activeConversation() === roundSession || getPreferences().autoScreenContext === false || !getOpenRouterApiKey()) return;
     const abort = new AbortController();
     earlyScreenDecision = { question, abort, decision: screenDecisionFor(question, false, abort.signal) };
 }
@@ -686,8 +689,8 @@ function answerSpokenQuestion(question, turnId) {
         send: (imageJpeg, depth) =>
             codingSession.active
                 ? sendCodingTurn({ text: `they said: ${question}`, label: question, turnId, imageJpeg, depth })
-                : incidentSession.active
-                  ? sendIncidentTurn({ text: `they said: ${question}`, label: question, turnId, depth })
+                : roundSession.active
+                  ? sendRoundTurn({ text: `they said: ${question}`, label: question, turnId, depth })
                   : sendNormalAnswer(question, { turnId, imageJpeg, depth }),
     });
 }
@@ -717,9 +720,10 @@ async function askWithScreenContext({ question, turnId, typed, send }) {
     const reused = !typed && early?.question === question;
     if (early && !reused) early.abort.abort();
     const prefs = getPreferences();
-    // DevOps evidence arrives only through the user's capture action. Follow-ups reuse the incident,
-    // rather than racing an automatic capture of a log the interviewer has not finished pasting.
-    if (activeConversation() === incidentSession) {
+    // A session round takes the screen only when the user captures it. DevOps follow-ups reuse the incident,
+    // rather than racing an automatic capture of a log the interviewer has not finished pasting. The
+    // experience round answers from the pasted background, so waiting for Jev would only delay it.
+    if (activeConversation() === roundSession) {
         early?.abort.abort();
         return send(null, 'quick');
     }
@@ -935,7 +939,7 @@ async function streamLanedAnswer({
     if (signal.aborted) return;
     if (failure || !result?.text.trim()) {
         if (codingTurn && conversation === codingSession) conversation.removeTurn(codingTurn);
-        else if (codingTurn) codingTurn.reply = ''; // Keep incident evidence even if its answer failed.
+        else if (codingTurn) codingTurn.reply = ''; // A session round keeps the question or evidence even if its answer failed.
         else liveAnswerFallbackPending = true;
         console.error('Text answer failed:', failure?.message || 'empty answer');
         sendToRenderer('update-status', `Answer failed: ${failure?.message || 'no text'}`);
@@ -992,21 +996,34 @@ function sendCodingTurn({ text, label, imageJpeg = null, turnId = createTurnId('
     });
 }
 
-/** @param {{text:string, label:string, imageJpeg?:string|null, turnId?:string, lane?:'main'|'side'|null, depth?:import('./answerModel').AnswerDepth}} turn */
-function sendIncidentTurn({ text, label, imageJpeg = null, turnId = createTurnId('incident'), lane = null, depth = 'think' }) {
-    const turn = incidentSession.addTurn({ text, imageJpeg });
+/**
+ * The next message in the session round's conversation.
+ * @param {{text:string, label:string, imageJpeg?:string|null, turnId?:string, lane?:'main'|'side'|null, depth?:import('./answerModel').AnswerDepth}} turn
+ */
+function sendRoundTurn({ text, label, imageJpeg = null, turnId = createTurnId('round'), lane = null, depth = 'think' }) {
+    const turn = roundSession.addTurn({ text, imageJpeg });
     return streamLanedAnswer({
         question: label,
         label: imageJpeg ? `📷 ${label}` : label,
         turnId,
         lane,
-        // Only the incident: Custom Instructions are written for the other profiles and stay out of DevOps answers.
-        systemPrompt: loadIncidentSkill(),
-        messages: incidentSession.messagesThrough(turn),
+        systemPrompt: roundSystemPrompt(),
+        messages: roundSession.messagesThrough(turn),
         codingTurn: turn,
-        conversation: incidentSession,
+        conversation: roundSession,
         depth,
     });
+}
+
+/**
+ * Only the round's own prompt: Custom Instructions are written for the other profiles and stay out of
+ * both rounds. The experience round adds the background the user pasted, read on every answer so an
+ * edit applies from the next one.
+ */
+function roundSystemPrompt() {
+    const profile = /** @type {'devops'|'experience'} */ (currentProfile);
+    const skill = loadSessionSkill(profile);
+    return profile === 'experience' ? `${skill}\n\n${buildExperienceBackground(getPreferences())}` : skill;
 }
 
 async function startCodingProblem(problemText = '') {
@@ -1021,7 +1038,7 @@ async function startCodingProblem(problemText = '') {
     const shot = await captureScreenStill({ quality: 'medium' });
     // A second "new problem" or "exit" while the screenshot was taken wins.
     if (start !== codingProblemStart) return;
-    // An incident answer or pending follow-up must not arrive over the new coding problem.
+    // A round answer or pending follow-up must not arrive over the new coding problem.
     for (const request of [...answerRequests]) cancelRequest(request);
     codingSession.startProblem();
     notifyCodingMode();
@@ -1046,7 +1063,8 @@ function exitCodingMode() {
     codingSession.stop();
     lastVoiceQuestion = null;
     notifyCodingMode();
-    sendToRenderer('update-status', incidentSession.active ? 'Coding mode off, back to the incident' : 'Coding mode off');
+    const backToIncident = roundSession.active && currentProfile === 'devops';
+    sendToRenderer('update-status', backToIncident ? 'Coding mode off, back to the incident' : 'Coding mode off');
 }
 
 /**
@@ -1744,8 +1762,8 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
     const enabledTools = await getEnabledTools();
     const googleSearchEnabled = enabledTools.some(tool => tool.googleSearch);
 
-    // Live only transcribes; meeting context and incident background go to the answer model only.
-    const systemPrompt = getSystemPrompt(profile, profile === 'meeting' || profile === 'devops' ? '' : customPrompt, googleSearchEnabled);
+    // Live only transcribes; meeting context and a session round's own prompt go to the answer model only.
+    const systemPrompt = getSystemPrompt(profile, profile === 'meeting' || isSessionRound(profile) ? '' : customPrompt, googleSearchEnabled);
     currentSystemPrompt = systemPrompt; // Store for Groq
 
     // Initialize new conversation session only on first connect
@@ -2354,7 +2372,7 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
 
     ipcMain.handle('initialize-gemini', async (event, apiKey, customPrompt, profile = 'interview', language = 'en-US') => {
         currentProviderMode = 'byok';
-        if (profile !== 'devops') warmScreenDecision();
+        if (!isSessionRound(profile)) warmScreenDecision();
 
         // Gemini Live 3.8 conversational path (STT + overlay answer in one session)
         const session = await initializeGeminiSession(apiKey, customPrompt, profile, language);
@@ -2478,19 +2496,23 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
                 sendCodingTurn({ text: 'screen: This is my screen right now.', label: 'Analyze Screen', imageJpeg: data });
                 return { success: true, model: 'coding' };
             }
-            if (incidentSession.active && textAnswersEnabled()) {
-                clearTimeout(answerTimer);
-                answerTimer = null;
+            if (roundSession.active && textAnswersEnabled()) {
                 lastVoiceQuestion = null;
-                const heard = currentTranscription.trim() || recentHeardText();
-                const text = [
-                    'screen: This is the latest evidence from the interviewer. Analyze what is new using the incident so far, then give one next evidence request.',
-                    heard ? `Recent interviewer speech, not additional screen evidence: ${heard}` : '',
-                ]
-                    .filter(Boolean)
-                    .join('\n');
-                sendIncidentTurn({ text, label: 'Analyze Screen', imageJpeg: data, lane: 'main' });
-                return { success: true, model: 'devops' };
+                let text = 'screen: This is my screen right now.';
+                if (currentProfile === 'devops') {
+                    // The capture carries the speech around it, so a spoken answer still waiting is dropped in its favour.
+                    clearTimeout(answerTimer);
+                    answerTimer = null;
+                    const heard = currentTranscription.trim() || recentHeardText();
+                    text = [
+                        'screen: This is the latest evidence from the interviewer. Analyze what is new using the incident so far, then give one next evidence request.',
+                        heard ? `Recent interviewer speech, not additional screen evidence: ${heard}` : '',
+                    ]
+                        .filter(Boolean)
+                        .join('\n');
+                }
+                sendRoundTurn({ text, label: 'Analyze Screen', imageJpeg: data, lane: 'main' });
+                return { success: true, model: currentProfile };
             }
             sendToRenderer('update-status', 'Analyzing screen...');
             // Paths whose answer is saved through saveConversationTurn label it "Analyze Screen";
@@ -2620,8 +2642,8 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
             send: (imageJpeg, depth) =>
                 codingSession.active
                     ? sendCodingTurn({ text: `command: ${userText}`, label: userText, turnId, imageJpeg, depth })
-                    : incidentSession.active
-                      ? sendIncidentTurn({ text: `command: ${userText}`, label: userText, turnId, depth })
+                    : roundSession.active
+                      ? sendRoundTurn({ text: `command: ${userText}`, label: userText, turnId, depth })
                       : sendNormalAnswer(userText, { turnId, imageJpeg, depth }),
         });
         return { success: true };

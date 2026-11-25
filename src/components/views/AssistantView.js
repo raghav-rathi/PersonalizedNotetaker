@@ -467,6 +467,9 @@ export class AssistantView extends LitElement {
         if (this.selectedProfile === 'devops') {
             return `Listening to your ${profileNames.devops}... Press Analyze Screen on each new log the interviewer shows. Follow-up answers show up under Follow-ups.`;
         }
+        if (this.selectedProfile === 'experience') {
+            return `Listening to your ${profileNames.experience}... Answers use only the background you pasted. A fact that's missing shows up as FILL IN.`;
+        }
         return `Listening to your ${profileNames[this.selectedProfile] || 'session'}...`;
     }
 
