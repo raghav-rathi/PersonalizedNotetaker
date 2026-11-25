@@ -594,3 +594,71 @@ Add an entry after each session: date, machine, what you ran, what you saw, what
 - 2026-10-28, Mac: added the requested capture-based DevOps flow on `rohit-edits`, preserving Python DSA and separate follow-up answers, section 7 change 20. Local tests and type check passed. Checked the real Electron UI with offline fixture responses and made one two-sentence Gemini Flash probe. No full paid drill or Windows run. Other branches and the earlier commercial-plan document were left unchanged.
 - 2026-10-28, Mac: DevOps answers no longer include Custom Instructions and use a spoken voice; the skill's stage 0, 1 and 4 asks are restored (section 7, change 21). The OpenRouter key on this Mac expired on 2026-10-26, so until a new one is saved every answer here comes from Gemini Flash, the fallback. Not yet run on Windows.
 - 2026-11-25, Mac: built a DMG from `rohit-edits` at `31b4fc7`: `out/make/Personalized Notetaker-0.7.0-arm64.dmg` (see the macOS notes in section 8). The signing keychain was missing, so `scripts/setup-mac-signing.sh` made a new certificate and the app's old permission records were reset. Checked: the signature verifies with a `certificate leaf` requirement, the DevOps prompt inside `app.asar` matches the repo, the packaged app started from the terminal and showed the start screen with DevOps / SRE Round in the Mode list, `main.log` had no warnings, and the DMG mounts with the app and an Applications shortcut. Not checked: a session in the packaged app, or the DMG on another Mac. The start screen's **Update available** button opens `cheatingdaddy.com/download`, which is the upstream app, not this build.
+- 2026-11-25, Mac: two audits of `rohit-edits` at `b56b4ec`, no app code changed (section 12). A third-party audit was checked claim by claim. A second one drove the real app in an isolated copy with scripted model replies and failures, plus six Gemini Flash calls on the DevOps prompt. Found on this Mac: the OpenRouter key is still expired, and `npm start` fails in the default terminal because the Electron binary is missing and the shell's Node is 20.18.1.
+
+## 12. Audit of `rohit-edits`, 2026-11-25
+
+Nothing in this section is fixed yet. "Reproduced" means seen through the real interface in an isolated copy of the app: a throwaway settings folder, fake keys, no network, a scripted answer model and a fake Live connection (a `boot.cjs` in a temp folder that stubbed `geminiLiveTransport`, `screenStill`, `screenDecision`, `streamOpenRouterAnswer` and `@google/genai` before loading `src/index.js`; it was not kept). "Traced" means read in code only.
+
+### 12.1 State of the Mac
+
+- OpenRouter key: expired (HTTP 401 from `openrouter.ai/api/v1/key`). Since 2026-10-26 every answer here has come from Gemini Flash, and nothing on screen says so.
+- `npm start` fails in the default terminal. The login shell's Node is 20.18.1, and `node_modules/electron/dist` has had no `Electron.app` since 2026-11-10, so Electron tries to download itself and stops with `ERR_REQUIRE_ESM` (cause A2). Fix: `env PATH=/opt/homebrew/opt/node@24/bin:$PATH node node_modules/electron/install.js`, then start with Node 22.12 or newer.
+- Displays: the external 2560×1440 monitor is the main display, so Analyze Screen never sees the laptop screen. `selectedImageQuality` is `medium`.
+- Gemini key: valid. It lists `gemini-3.8-flash`, `gemini-3.8-live` and `gemini-3.1-flash-lite`.
+
+### 12.2 Reproduced
+
+Answer pipeline (`gemini.js`, `answerModel.js`, `answerLanes.js`):
+
+- A reply whose answer starts on the `LANE:` line loses that whole first line (`LANE_HEADER`).
+- A reply that is only the `LANE:` line shows nothing and reports nothing.
+- A stream that stalls after its first text leaves "Answering..." with no card, no fallback and no timeout. The next question recovers.
+- A stream that fails after some text leaves the partial card with no mark and no fallback.
+- An older question whose first text arrives late cancels the newer answer mid-sentence and takes focus, because `claimLane` only runs at first text. The newer answer was cut at 829 of 1,550 characters.
+- After any failed answer, the next thing heard, even "okay", adds an unlabeled card with Live's own spoken reply. `liveAnswerFallbackPending` is only cleared by a Live turn or session end.
+- A rejected OpenRouter key costs two calls per question (OpenRouter, then Gemini), and no card shows which model answered.
+- When both models fail, the status is the raw JSON error and it runs under the screen tabs.
+- Job Interview memory: with answers of about 270 words, the twelfth question was sent 6,000 characters that began mid-sentence, held only the last three answers and had no summary.
+- Raw HTML in an answer ran script in the window. `vector<int>` and `<folder>` disappeared from prose. Clicking a link replaced the overlay with the linked page, which had Node access.
+
+DevOps:
+
+- Speech right after a capture gets its own SIDE answer and moves the overlay to Follow-ups while the capture answer is still arriving. Real Gemini Flash chose SIDE in two of two runs for "So, what do you make of this?" after a capture. It chose NONE in two of two runs for "here's the alert history, tell me what you think" before a capture.
+- Each capture repeats up to three minutes of speech that was already sent and answered (`recentHeardText` in the `send-image-content` handler). In two real runs this did not change the capture answer.
+- Two quick presses of the capture key give two turns and two stored screenshots, and cut the first answer off.
+- A fenced `text` block in a capture answer splits the card, and the block does not wrap.
+
+Coding and session:
+
+- Scrolling the code column while the answer streams snaps back to the top on the next update.
+- A bare "yes" calls no model, although the DSA prompt ends steps with yes/no questions.
+- A failed start shows nothing once the two-second red flash on the key field ends.
+- The capture key with Settings open and no session sent a screenshot to the answer model.
+- Ending a session and starting again while Live is still reconnecting opened two Live connections for the new session.
+- "Analyzing screen..." stays as the status after a normal Analyze Screen finishes.
+
+Handled well: a dropped Live connection reconnected and answers continued; ending a session mid-answer left no late card; a failed capture showed a notice; evidence that was announced but not yet captured got no reply.
+
+### 12.3 Traced, not run
+
+- Windows keys (`getDefaultKeybinds` in `window.js`): `Ctrl+Left/Right/Up/Down` move the overlay with no clamp and are taken from every app, as are `Ctrl+[`, `Ctrl+]`, `Ctrl+Enter`, `Ctrl+M` and `Ctrl+Shift+Up/Down`. The lone Alt tap cannot be turned off: `startHideShortcut` ignores the saved binding, and a saved `Ctrl+\` is rewritten to Alt at launch. `Alt+Shift` is also the Windows input-language switch.
+- Windows focus: `show()` gives the overlay keyboard focus, and `_openInputOnType` puts the next printable key into the message box. Enter then sends it as a question. Check this on the PC.
+- Emergency Erase is `Ctrl+Shift+E`, which Microsoft lists as the Teams "toggle share content tray" shortcut.
+- Tray "Show" after an Alt hide leaves the window click-through until the next Alt tap. Section 4.5 says it brings the window back. Tray "Stop meeting" quits the app when no session is running.
+- `handleLiveInterrupted` drops the heard text without `rememberHeard`, so interrupted speech is missing from "Recently heard" and from history.
+- Audio that arrives while Live reconnects is drained into the closed socket and lost. Nothing watches the loopback track or the output device on Windows.
+- After the 60 s reconnect limit, or a fatal close, `geminiSessionRef.current` stays set and the status stays on "Reconnecting...".
+- `dsa-coding-skill.md` describes an SDE-1 recent graduate. `devops-skill.md` and the owner's Custom Instructions say SDE-2.
+- Live still gets the full system prompt and `LIVE_ALWAYS_RESPOND` in Job Interview and Coding Round.
+- `README.md` still describes lesson cards, the "They asked" header and type-along (lines 72 to 75 and 91), and names Gemini 2.0 Flash Live.
+- Bundle: onnxruntime-node (210 MB), onnxruntime-web (90 MB), transformers (46 MB) and sharp (15 MB) are used by Local mode only. That is about 360 MB of the 686 MB app.
+
+### 12.4 The third-party audit
+
+Its report is in `~/.gemini/antigravity/brain/8396e17e-3d39-4e59-be5f-b74f851c3916/` (section 4 is the bug register). Of about 125 claims, a little over half held as written, about a third were real but overstated, and about ten were wrong.
+
+- Held, and not listed above: Audio Mode "both" interleaves two streams on macOS; the shortcut recorder binds Escape and Backspace as shortcuts; "Restore all settings" clears Custom Instructions without asking; HistoryView shows no transcript or summary records; the top 79 px of the BYOK start form are clipped at 1100×800; one failed history write blocks every later write in that session.
+
+- Wrong: an Anthropic cap of 20 images (the API allows 100 or more; above 20 images each must be at most 2,000 px, and captures are 1,280 px wide); a missing `NSMicrophoneUsageDescription`; Gemini or OpenRouter keys in `main.log`; GoAway closing the old socket first; `start-new-session` wiping the profile (it has no caller).
+- Screenshot test with Gemini Flash on 15 synthetic log lines: a 2560×1440 screen at JPEG quality 60 gave 8 lines with a wrong character (`=` read as `-`). Quality 85, or a 1,920 px cap, gave none. A 1920×1080 screen gave none at quality 60.
