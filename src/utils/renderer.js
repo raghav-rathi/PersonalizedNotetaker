@@ -12,6 +12,7 @@ let audioSources = [];
 let audioSink = null;
 let captureGeneration = 0;
 let pendingAudioSends = 0;
+let pendingMicSends = 0;
 let screenshotDelayTimer = null;
 const SAMPLE_RATE = 24000;
 const AUDIO_CHUNK_DURATION = 0.04; // seconds — Live API prefers 20–40ms chunks
@@ -646,45 +647,57 @@ function stopStream(stream) {
     stream?.getTracks().forEach(track => track.stop());
 }
 
-async function setupSharedAudioWorklet({ streams, sampleRate, generation }) {
+// One AudioContext for every browser source. The meeting's audio goes to Live. In the "Speaker + my
+// microphone" mode my microphone has its own node and channel: it's written down for context, never answered.
+async function setupAudioWorklets({ meetingStreams, micStream, sampleRate, generation }) {
     audioContext = new AudioContext({ sampleRate });
     await audioContext.audioWorklet.addModule(new URL('./audio-worklet.js', window.location.href).href);
     if (generation !== captureGeneration) throw new Error('Audio capture start was cancelled');
 
+    audioSink = audioContext.createGain();
+    audioSink.gain.value = 0;
+    audioSink.connect(audioContext.destination);
+    if (meetingStreams.length) {
+        audioProcessor = createPcmNode(meetingStreams, sampleRate);
+        audioProcessor.port.onmessage = event => {
+            if (generation !== captureGeneration || pendingAudioSends >= 50) return;
+            pendingAudioSends++;
+            sendAudioFrame('send-audio-frame', event.data, { generation, sampleRate, source: 'single' }).finally(() => pendingAudioSends--);
+        };
+    }
+    if (micStream) {
+        micAudioProcessor = createPcmNode([micStream], sampleRate);
+        micAudioProcessor.port.onmessage = event => {
+            if (generation !== captureGeneration || pendingMicSends >= 50) return;
+            pendingMicSends++;
+            sendAudioFrame('send-mic-frame', event.data, { generation, sampleRate, source: 'microphone' }).finally(() => pendingMicSends--);
+        };
+    }
+    await audioContext.resume();
+}
+
+function createPcmNode(streams, sampleRate) {
     const merger = audioContext.createChannelMerger(streams.length);
-    audioSources = streams.map((stream, index) => {
+    streams.forEach((stream, index) => {
         const source = audioContext.createMediaStreamSource(stream);
         source.connect(merger, 0, index);
-        return source;
+        audioSources.push(source);
     });
-    audioProcessor = new AudioWorkletNode(audioContext, 'meeting-pcm-processor', {
+    const node = new AudioWorkletNode(audioContext, 'meeting-pcm-processor', {
         numberOfInputs: 1,
         numberOfOutputs: 1,
         outputChannelCount: [1],
         processorOptions: { frameSamples: Math.floor(sampleRate * AUDIO_CHUNK_DURATION) },
     });
-    audioSink = audioContext.createGain();
-    audioSink.gain.value = 0;
-    merger.connect(audioProcessor);
-    audioProcessor.connect(audioSink);
-    audioSink.connect(audioContext.destination);
-    audioProcessor.port.onmessage = event => {
-        if (generation !== captureGeneration || pendingAudioSends >= 50) return;
-        const frame = event.data;
-        pendingAudioSends++;
-        ipcRenderer
-            .invoke('send-audio-frame', {
-                generation,
-                source: streams.length > 1 ? 'mixed' : 'single',
-                sequence: frame.sequence,
-                capturedAt: frame.capturedAt,
-                sampleRate,
-                pcm: frame.pcm,
-            })
-            .catch(error => console.error('Failed to send audio frame:', error))
-            .finally(() => pendingAudioSends--);
-    };
-    await audioContext.resume();
+    merger.connect(node);
+    node.connect(audioSink);
+    return node;
+}
+
+function sendAudioFrame(channel, frame, details) {
+    return ipcRenderer
+        .invoke(channel, { ...details, sequence: frame.sequence, capturedAt: frame.capturedAt, pcm: frame.pcm })
+        .catch(error => console.error(`Failed to send audio frame on ${channel}:`, error));
 }
 
 async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'medium') {
@@ -724,10 +737,12 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
             }
         }
 
-        const browserStreams = [];
-        if (mediaStream?.getAudioTracks().length) browserStreams.push(mediaStream);
-        if (micMediaStream?.getAudioTracks().length) browserStreams.push(micMediaStream);
-        if (browserStreams.length) await setupSharedAudioWorklet({ streams: browserStreams, sampleRate, generation });
+        const meetingStreams = [];
+        if (mediaStream?.getAudioTracks().length) meetingStreams.push(mediaStream);
+        const hasMic = Boolean(micMediaStream?.getAudioTracks().length);
+        if (hasMic && audioMode === 'mic_only') meetingStreams.push(micMediaStream);
+        const micStream = hasMic && audioMode === 'both' ? micMediaStream : null;
+        if (meetingStreams.length || micStream) await setupAudioWorklets({ meetingStreams, micStream, sampleRate, generation });
         if (generation !== captureGeneration) throw new Error('Audio capture start was cancelled');
 
         if (!inputs.length) {
@@ -745,6 +760,7 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
 async function stopCapture() {
     captureGeneration++;
     pendingAudioSends = 0;
+    pendingMicSends = 0;
     if (screenshotInterval) clearInterval(screenshotInterval);
     screenshotInterval = null;
     if (screenshotDelayTimer) clearTimeout(screenshotDelayTimer);
@@ -752,11 +768,11 @@ async function stopCapture() {
     if (pendingScreenshotJob?.resolve) pendingScreenshotJob.resolve({ success: false, error: 'Meeting stopped' });
     pendingScreenshotJob = null;
 
-    if (audioProcessor) {
-        audioProcessor.port.onmessage = null;
-        audioProcessor.disconnect();
+    for (const node of [audioProcessor, micAudioProcessor]) {
+        if (!node) continue;
+        node.port.onmessage = null;
+        node.disconnect();
     }
-    micAudioProcessor?.disconnect();
     for (const source of audioSources) source.disconnect();
     audioSink?.disconnect();
     audioProcessor = null;

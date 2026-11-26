@@ -57,6 +57,10 @@ Live's own reply stays hidden unless both fail. If the interviewer pauses mid-qu
 
 The overlay has a **Main** screen and a **Follow-ups** screen, with tabs in the top bar. Main answers stay on Main. When the interviewer asks a follow-up or counter-question, a short answer appears on Follow-ups and the overlay jumps there. `Cmd+Option+Left` goes back to Main, to the same answer and scroll position, and `Cmd+Option+Right` opens Follow-ups again. Remarks such as "okay" or "mm-hmm" get no answer.
 
+### When you say something different
+
+By default the app hears only the interviewer, so it assumes you said its suggested answer. In **Settings**, set **Audio Mode** to **Speaker + My Microphone** and it also listens to your microphone. What you say is written down and kept in the conversation, so when you talk about a different project than the one suggested, the follow-up answer builds on what you said. Your own speech never produces an answer or moves the overlay. See [hearing your answers](docs/how-to-use.md#let-the-app-hear-what-you-say).
+
 ### Experience / resume round
 
 In **Use your API keys**, choose **Experience / Resume Round** under **Mode**. Paste your resume, projects and history once into **My background** under **AI Customization**. Every answer about you then uses only those facts, and the whole interview runs as one conversation, so later answers stay consistent with earlier ones. When the interviewer asks for a fact that isn't in your background, the answer starts with a **FILL IN** line that names it and leaves a gap in square brackets where you say the real thing. This mode has no coding or incident steps. See [the experience workflow](docs/how-to-use.md#experience--resume-round).
@@ -100,6 +104,7 @@ Word counts are generation targets, not guarantees. Read an answer before you sa
 - **macOS**: [SystemAudioDump](https://github.com/Mohammed-Yasin-Mulla/Sound) for system audio
 - **Windows**: Loopback audio capture
 - **Linux**: Microphone input
+- **Speaker + My Microphone**: the microphone is written down for context with `gemini-3.1-flash-lite` and is never sent to Gemini Live or answered (checked on macOS; not yet run on Windows)
 
 ## Requirements
 

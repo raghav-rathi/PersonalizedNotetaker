@@ -38,6 +38,7 @@ const { streamOpenRouterAnswer, answerWithFallback, toGeminiContents, answerMode
 const { LANE_INSTRUCTION, parseLaneHeader, splitSideUpdate, isReplaceableAnswer, resolveLane, isBackchannel } = require('./answerLanes');
 const { CODING_COMMANDS, EXIT_WORDS, NEW_PROBLEM_WORDS, loadCodingSkill, loadSessionSkill, ensureUserSkillFile, CodingSession } = require('./codingSession');
 const { isSessionRound } = require('./sessionRounds');
+const { SpeechSegmenter, isEcho, transcribeUtterance, MY_SPEECH_INSTRUCTION } = require('./mySpeech');
 
 // Lazy-loaded to avoid circular dependency (localai.js imports from gemini.js)
 let _localai = null;
@@ -355,6 +356,8 @@ function initializeNewSession(profile = null, customPrompt = null) {
         profile,
         customPrompt: customPrompt || '',
     }).catch(error => sendToRenderer('update-status', `History error: ${error.message}`));
+    // "Speaker + my microphone": what I say is written down for context and never answered.
+    if (textAnswersEnabled() && prefs.audioMode === 'both') mySpeech = new SpeechSegmenter({ onUtterance: writeDownMySpeech });
     console.log(
         'New conversation session started:',
         currentSessionId,
@@ -467,8 +470,13 @@ function buildSessionContextText() {
     return buildRelevantContext({
         query: pendingTypedQuestion || currentTranscription,
         summary: currentSummary,
-        records: [...conversationHistory, ...screenAnalysisHistory].sort((a, b) => a.timestamp - b.timestamp),
+        records: contextRecords(),
     });
+}
+
+/** What was asked, answered, analyzed and said in normal answers so far, oldest first. */
+function contextRecords() {
+    return [...conversationHistory, ...screenAnalysisHistory, ...mySpeechHistory].sort((a, b) => a.timestamp - b.timestamp);
 }
 
 function composeUserTurn(text) {
@@ -544,6 +552,72 @@ const roundSession = new CodingSession();
 
 function activeConversation() {
     return codingSession.active ? codingSession : roundSession.active ? roundSession : null;
+}
+
+// My microphone in the "Speaker + my microphone" audio mode (mySpeech.js). What I say goes into the active
+// conversation as "I said: ...", so a follow-up is answered from my words, and it's never answered itself.
+// A question waits up to MY_SPEECH_WAIT_MS for what I said just before it to be written down.
+const MY_SPEECH_WAIT_MS = 2500;
+// Interviewer speech from this long before an utterance can be what the microphone heard as echo.
+const ECHO_WINDOW_MS = 30000;
+/** @type {SpeechSegmenter|null} */
+let mySpeech = null;
+let mySpeechGeneration = 0;
+let mySpeechSequence = 0;
+/** @type {Set<Promise<void>>} */
+const mySpeechJobs = new Set();
+// What I said outside a coding problem or session round, for normal answers' context.
+let mySpeechHistory = [];
+
+function stopMySpeech() {
+    mySpeech = null;
+    mySpeechGeneration++;
+    mySpeechJobs.clear();
+    mySpeechHistory = [];
+}
+
+/** @param {import('./mySpeech').Utterance} utterance */
+function writeDownMySpeech(utterance) {
+    const apiKey = getApiKey();
+    if (!apiKey) return;
+    const generation = mySpeechGeneration;
+    // The conversation I was speaking in. If that coding problem or round ends first, the words are dropped.
+    const conversation = activeConversation();
+    const problemId = conversation?.problemId;
+    const job = transcribeUtterance({ client: getTextModelClient(apiKey), pcm: utterance.pcm, sampleRate: utterance.sampleRate })
+        .then(text => {
+            if (generation !== mySpeechGeneration || !text) return;
+            const heard = heardLog.filter(item => item.at >= utterance.startAt - ECHO_WINDOW_MS).map(item => item.text);
+            if (isEcho(text, [...heard, currentTranscription].join(' '))) {
+                console.log(`[me] ignored the interviewer heard through the speakers: "${shortLabel(text, 60)}"`);
+                return;
+            }
+            rememberMySpeech(text, utterance.endAt, conversation, problemId);
+        })
+        .catch(error => console.warn(`[me] could not write down what you said: ${error.message}`))
+        .finally(() => mySpeechJobs.delete(job));
+    mySpeechJobs.add(job);
+}
+
+function rememberMySpeech(text, at, conversation, problemId) {
+    if (!currentSessionId) return;
+    const record = { id: `${currentSessionId}:me:${++mySpeechSequence}`, type: 'transcript', speaker: 'me', timestamp: at, transcription: text };
+    appendSessionRecord(currentSessionId, record).catch(error => sendToRenderer('update-status', `History error: ${error.message}`));
+    if (!conversation) mySpeechHistory.push(record);
+    else if (conversation.active && conversation.problemId === problemId) conversation.addTurn({ text: `I said: ${text}`, at });
+    else return;
+    console.log(`[me] said ${text.split(/\s+/).length} words: "${shortLabel(text, 60)}"`);
+}
+
+/** Ends what I'm saying and waits, briefly, until everything I said before now is written down. */
+async function settleMySpeech() {
+    if (!mySpeech) return;
+    mySpeech.flush();
+    if (!mySpeechJobs.size) return;
+    let timer;
+    const timeout = new Promise(resolve => (timer = setTimeout(resolve, MY_SPEECH_WAIT_MS)));
+    await Promise.race([Promise.allSettled([...mySpeechJobs]), timeout]);
+    clearTimeout(timer);
 }
 
 function showIdleStatus() {
@@ -622,6 +696,7 @@ function cancelTextAnswers() {
         codingSession.stop();
         notifyCodingMode();
     }
+    stopMySpeech();
 }
 
 function scheduleAnswerForVoiceTurn() {
@@ -720,20 +795,29 @@ async function askWithScreenContext({ question, turnId, typed, send }) {
     const reused = !typed && early?.question === question;
     if (early && !reused) early.abort.abort();
     const prefs = getPreferences();
+    // What I said just before this question goes into its answer, so the answer waits for it to be written down.
+    const mySpeechSettled = mySpeech ? settleMySpeech() : null;
+    const seq = ++askSeq;
+    waitingAsks.set(turnId, seq);
+    const stillAsked = () => {
+        if (waitingAsks.get(turnId) !== seq) return false;
+        waitingAsks.delete(turnId);
+        return true;
+    };
     // A session round takes the screen only when the user captures it. DevOps follow-ups reuse the incident,
     // rather than racing an automatic capture of a log the interviewer has not finished pasting. The
     // experience round answers from the pasted background, so waiting for Jev would only delay it.
     if (activeConversation() === roundSession) {
         early?.abort.abort();
-        return send(null, 'quick');
+        if (mySpeechSettled) await mySpeechSettled;
+        return stillAsked() ? send(null, 'quick') : undefined;
     }
     const lastShot = lastScreenshotJpeg && needsVisualContext(question) ? lastScreenshotJpeg : null;
     if (prefs.autoScreenContext === false || !getOpenRouterApiKey()) {
         console.log('[screen] jev off, quick');
-        return send(lastShot, 'quick');
+        if (mySpeechSettled) await mySpeechSettled;
+        return stillAsked() ? send(lastShot, 'quick') : undefined;
     }
-    const seq = ++askSeq;
-    waitingAsks.set(turnId, seq);
     const shot = captureScreenStill({ quality: prefs.selectedImageQuality || 'medium' }).then(result => {
         if (!result.success) {
             console.warn(`[screen] capture failed: ${result.error}`);
@@ -764,8 +848,8 @@ async function askWithScreenContext({ question, turnId, typed, send }) {
         if (sharing || keyword) console.log(`[screen] ${sharing ? 'pending share' : 'keyword'}`);
         imageJpeg = await shot;
     }
-    if (waitingAsks.get(turnId) !== seq) return;
-    waitingAsks.delete(turnId);
+    if (mySpeechSettled) await mySpeechSettled;
+    if (!stillAsked()) return;
     return send(imageJpeg, depth);
 }
 
@@ -846,6 +930,8 @@ async function streamLanedAnswer({
     const apiKey = getApiKey();
     if (!apiKey || !question.trim()) return;
     const openRouterKey = getOpenRouterApiKey();
+    // While my microphone is heard, the answer is told how to use what I actually said.
+    const instructions = mySpeech ? `${systemPrompt}\n\n${MY_SPEECH_INSTRUCTION}` : systemPrompt;
     /** @type {AnswerRequest} */
     const request = { abort: new AbortController(), turnId, codingTurn, conversation };
     answerRequests.add(request);
@@ -893,7 +979,7 @@ async function streamLanedAnswer({
         }
     };
 
-    const gemini = ({ signal, onText }) => streamGeminiAnswer({ apiKey, systemPrompt, messages, signal, onText });
+    const gemini = ({ signal, onText }) => streamGeminiAnswer({ apiKey, systemPrompt: instructions, messages, signal, onText });
     sendToRenderer('update-status', depth === 'think' ? 'Thinking...' : 'Answering...');
     let result = null;
     let failure = null;
@@ -904,7 +990,7 @@ async function streamLanedAnswer({
                       streamOpenRouterAnswer({
                           apiKey: openRouterKey,
                           model: answerModel,
-                          systemPrompt,
+                          systemPrompt: instructions,
                           messages,
                           maxTokens: ANSWER_MAX_OUTPUT_TOKENS,
                           sessionId: answerSessionId,
@@ -963,7 +1049,7 @@ async function streamLanedAnswer({
 
 /** @param {string} question @param {{turnId?:string, imageJpeg?:string|null, depth?:import('./answerModel').AnswerDepth}} [options] */
 function sendNormalAnswer(question, { turnId = createTurnId('answer'), imageJpeg = null, depth = 'think' } = {}) {
-    const records = [...conversationHistory, ...screenAnalysisHistory].sort((a, b) => a.timestamp - b.timestamp);
+    const records = contextRecords();
     const context = buildRelevantContext({ query: question, summary: currentSummary, records }).slice(-ANSWER_CONTEXT_CHARS);
     const userText = `${context ? `Conversation so far:\n${context}\n\n` : ''}Main question on screen: ${mainQuestion || 'none yet'}\n\nQuestion:\n${question}`;
     return streamLanedAnswer({
@@ -1090,7 +1176,10 @@ function handleCodingCommand(name, { problemText = '' } = {}) {
     if (!command) return { success: false, error: `Unknown coding command: ${name}` };
     if (!codingSession.active) return { success: false, error: 'Coding mode is off. Start with "New problem".' };
     lastVoiceQuestion = null;
-    sendCodingTurn({ text: command.text, label: command.label, lane: 'main' });
+    const send = () => codingSession.active && sendCodingTurn({ text: command.text, label: command.label, lane: 'main' });
+    // What I said since the last step goes in before this one.
+    if (mySpeech) settleMySpeech().then(send);
+    else send();
     return { success: true };
 }
 
@@ -1552,7 +1641,11 @@ function resampleLive24kTo16k(inputBuffer) {
 }
 
 function enqueueLivePcm(monoPcm, sampleRate, sessionRef, isSynthetic = false) {
-    if (!isSynthetic) liveGapFiller.noteRealFrame();
+    if (!isSynthetic) {
+        liveGapFiller.noteRealFrame();
+        // The interviewer is talking, so my microphone may be hearing them through the speakers.
+        mySpeech?.noteInterviewer(monoPcm, sampleRate, Date.now());
+    }
     const session = sessionRef?.current;
     if (!session || !monoPcm?.length) return;
     const pcm16k = sampleRate === 16000 ? monoPcm : resampleLive24kTo16k(monoPcm);
@@ -2251,7 +2344,7 @@ async function sendImageToGeminiHttp(base64Data, request) {
     }
 
     const answer = createAnswerStream('screen-gemini', { label: 'Analyze Screen' });
-    const records = [...conversationHistory, ...screenAnalysisHistory].sort((a, b) => a.timestamp - b.timestamp);
+    const records = contextRecords();
     const context = buildRelevantContext({ query: request, summary: currentSummary, records });
     const screenRequest = buildScreenAnalysisRequest({ data: base64Data, request, context });
     const userText = screenRequest.contents[0].parts.find(part => part.text)?.text || '';
@@ -2435,38 +2528,15 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
         return { success: false, error: 'No active Gemini session' };
     });
 
-    // Handle microphone audio on a separate channel
-    ipcMain.handle('send-mic-audio-content', async (event, { data, mimeType }) => {
-        if (currentProviderMode === 'cloud') {
-            try {
-                const pcmBuffer = Buffer.from(data, 'base64');
-                sendCloudAudio(pcmBuffer);
-                return { success: true };
-            } catch (error) {
-                console.error('Error sending cloud mic audio:', error);
-                return { success: false, error: error.message };
-            }
-        }
-        if (currentProviderMode === 'local') {
-            try {
-                const pcmBuffer = Buffer.from(data, 'base64');
-                getLocalAi().processLocalAudio(pcmBuffer);
-                return { success: true };
-            } catch (error) {
-                console.error('Error sending local mic audio:', error);
-                return { success: false, error: error.message };
-            }
-        }
-        if (geminiSessionRef.current) {
-            enqueueLivePcm(Buffer.from(data, 'base64'), 24000, geminiSessionRef);
+    // My microphone in the "Speaker + my microphone" mode: written down for context, never sent to Live.
+    ipcMain.handle('send-mic-frame', async (event, payload) => {
+        try {
+            const frame = validateAudioFrame(payload);
+            mySpeech?.pushMic(frame.pcm, frame.sampleRate, Date.now());
             return { success: true };
+        } catch (error) {
+            return { success: false, error: error.message };
         }
-        if (canUseGroqFallback()) {
-            const pcmBuffer = Buffer.from(data, 'base64');
-            processAudioForWhisper(pcmBuffer);
-            return { success: true };
-        }
-        return { success: false, error: 'No active Gemini session' };
     });
 
     ipcMain.handle('capture-screen-still', async (event, payload = {}) => {
@@ -2490,6 +2560,8 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
             }
 
             rememberScreenshot(data);
+            // What I said just before the capture goes in before it.
+            if (mySpeech) await settleMySpeech();
             if (codingSession.active && textAnswersEnabled()) {
                 // The screenshot joins the problem's conversation: it can show my code, a failing test or a changed problem.
                 lastVoiceQuestion = null;

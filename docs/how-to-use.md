@@ -15,7 +15,7 @@ This guide is for macOS. Windows keys are listed too, but they haven't been trie
     - **Answer Model**. GPT-6 Astra is the default. See "Which answer model" below.
 5. For normal interviews, open **AI Customization** and paste `docs/prompts/interview-prompt.txt` into **Custom Instructions**. DevOps and the Experience / Resume Round have their own built-in prompts and don't send Custom Instructions at all.
 6. Pick **Mode** on the start screen, or the same **Profile** in AI Customization. Choose **Job Interview**, **Experience / Resume Round**, **Coding Round (DSA)**, **LLD Interview**, **HLD / System Design** or **DevOps / SRE Round**. The choice applies from the next session. DevOps and the Experience / Resume Round require **Use your API keys**.
-7. In **Settings**, set **Audio Mode** to **Speaker Only (Interviewer)**.
+7. In **Settings**, set **Audio Mode** to **Speaker + My Microphone** if you want the app to follow what you actually say (see "Let the app hear what you say" below), or **Speaker Only (Interviewer)** if not.
 
 ## Starting a session
 
@@ -75,6 +75,32 @@ You don't need to press anything. When the interviewer finishes a question, the 
 - **Analyze Screen** (the ⚡ button, or `Cmd+Enter`) reads your screen and answers what's on it.
 
 Read every answer before you say it. The model can still add a detail that isn't in your background.
+
+## Let the app hear what you say
+
+With **Speaker Only (Interviewer)**, the app hears only the interviewer and assumes you said the answer it suggested. If you talk about a different project, the next follow-up gets answered about the suggested one.
+
+**Speaker + My Microphone** fixes that:
+
+- The app also listens to your microphone, in the background. What you say is written down and added to the conversation as "I said".
+- Your speech never produces an answer, a card or a screen change. Only the interviewer's questions get answers.
+- When the interviewer follows up, the answer builds on what you actually said. If you talked about project B instead of the suggested project A, the follow-up is about B.
+- What you say about yourself counts as a fact for the rest of the session, so later answers don't contradict you.
+- It works in every mode with **Use your API keys**.
+
+Set it up once:
+
+1. In **Settings**, set **Audio Mode** to **Speaker + My Microphone**.
+2. The first time, macOS asks for microphone access. Allow it. When you start with `npm start`, the permission belongs to your terminal, under System Settings, Privacy & Security, **Microphone**.
+3. Start a session as usual. If the microphone doesn't work, a **Notice** card says so at the start.
+
+Things to know:
+
+- **Headphones work best.** With laptop speakers, your microphone also picks up the interviewer. The app ignores your microphone while the interviewer's audio is playing and for a moment after, so it doesn't write their words down as yours. This also means that anything you say over the interviewer is not kept.
+- **Timing.** Your words are written down about one to two seconds after you pause. If the interviewer asks right as you finish, the answer waits up to 2.5 seconds for them.
+- **Accuracy.** Technical words can come out slightly wrong, like "Gvector" for pgvector. The answer model reads them for meaning.
+- **Cost.** Your speech goes to Gemini (`gemini-3.1-flash-lite`) to be written down: about 1,500 tokens for each minute you speak.
+- **History.** What you said is saved in the session history alongside the interviewer's speech.
 
 ## Experience / resume round
 

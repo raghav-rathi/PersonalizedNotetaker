@@ -985,6 +985,14 @@ export class CheatingDaddyApp extends LitElement {
         this.sessionActive = true;
         this.currentView = 'assistant';
         this._startTimer();
+        // "Speaker + my microphone" with no microphone: answers can't see what I say. The status line is
+        // replaced at the next update, so this stays as a card.
+        const micFailure = prefs.audioMode === 'both' ? result.capture?.warnings?.find(warning => warning.startsWith('Microphone:')) : null;
+        if (micFailure) {
+            this.addNewResponse(
+                `${micFailure}. Answers can't see what you say until the microphone works. On a Mac, allow it in System Settings, Privacy & Security, Microphone (for your terminal when you use npm start), then start again.`
+            );
+        }
     }
 
     async handleAPIKeyHelp() {

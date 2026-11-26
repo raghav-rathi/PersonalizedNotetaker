@@ -79,7 +79,7 @@ function ensureUserSkillFile(profile, configDir = getConfigDir()) {
 }
 
 /** @typedef {{role:'user'|'assistant', text:string, imageJpeg?:string|null}} ChatMessage */
-/** @typedef {{text:string, imageJpeg:string|null, reply:string}} CodingTurn */
+/** @typedef {{text:string, imageJpeg:string|null, reply:string, at:number}} CodingTurn */
 
 class CodingSession {
     constructor() {
@@ -101,11 +101,17 @@ class CodingSession {
         this.active = false;
     }
 
-    /** @param {{text:string, imageJpeg?:string|null}} turn */
-    addTurn({ text, imageJpeg = null }) {
+    /**
+     * Adds a turn in time order. What I said is written down a moment after I said it, so it can arrive
+     * after a later question and still go before it.
+     * @param {{text:string, imageJpeg?:string|null, at?:number}} turn
+     */
+    addTurn({ text, imageJpeg = null, at = Date.now() }) {
         /** @type {CodingTurn} */
-        const turn = { text, imageJpeg, reply: '' };
-        this.turns.push(turn);
+        const turn = { text, imageJpeg, reply: '', at };
+        const later = this.turns.findIndex(item => item.at > at);
+        if (later === -1) this.turns.push(turn);
+        else this.turns.splice(later, 0, turn);
         return turn;
     }
 

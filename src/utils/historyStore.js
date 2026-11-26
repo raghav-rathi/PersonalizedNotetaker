@@ -3,9 +3,16 @@ const path = require('node:path');
 
 const MAX_PENDING_BYTES = 4 * 1024 * 1024;
 
-/** @typedef {{id?:string,type?:string,timestamp?:number,transcription?:string,ai_response?:string,prompt?:string,response?:string,summary?:string}} HistoryRecord */
+/** @typedef {{id?:string,type?:string,timestamp?:number,transcription?:string,ai_response?:string,prompt?:string,response?:string,summary?:string,speaker?:string}} HistoryRecord */
 
 function recordText(record) {
+    // The answer was only suggested: with the microphone heard, what the user actually said is its own record.
+    if (record.type === 'turn') {
+        return [record.transcription && `Question: ${record.transcription}`, record.ai_response && `Suggested answer: ${record.ai_response}`]
+            .filter(Boolean)
+            .join('\n');
+    }
+    if (record.speaker === 'me') return `I said: ${record.transcription}`;
     return [record.transcription, record.ai_response, record.prompt, record.response].filter(Boolean).join('\n');
 }
 

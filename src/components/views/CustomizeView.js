@@ -635,10 +635,25 @@ export class CustomizeView extends LitElement {
                         <label class="form-label">Audio Mode</label>
                         <select class="control" .value=${this.audioMode} @change=${this.handleAudioModeSelect}>
                             <option value="speaker_only">Speaker Only (Interviewer)</option>
+                            <option value="both">Speaker + My Microphone</option>
                             <option value="mic_only">Microphone Only (Me)</option>
-                            <option value="both">Both Speaker and Microphone</option>
                         </select>
                     </div>
+                    ${
+                        this.audioMode === 'both'
+                            ? html`
+                                  <div class="form-help">
+                                      Your microphone is heard but never answered. What you say is written down, so a follow-up is answered from your
+                                      words, even when you didn't use the suggestion. Needs Use your API keys. Without headphones, your microphone is
+                                      ignored while the interviewer is talking.
+                                  </div>
+                              `
+                            : this.audioMode === 'mic_only'
+                              ? html`
+                                    <div class="warning-callout">May cause unexpected behavior. Only change this if you know what you're doing.</div>
+                                `
+                              : ''
+                    }
                     <div class="form-group">
                         <label class="form-label">Pause sensitivity</label>
                         <select class="control" .value=${this.vadPreset} @change=${this.handleVadPresetSelect}>
@@ -646,13 +661,6 @@ export class CustomizeView extends LitElement {
                             <option value="patient">Patient (900 / 1200 ms)</option>
                         </select>
                     </div>
-                    ${
-                        this.audioMode !== 'speaker_only'
-                            ? html`
-                                  <div class="warning-callout">May cause unexpected behavior. Only change this if you know what you're doing.</div>
-                              `
-                            : ''
-                    }
                     <div class="form-group">
                         <label class="form-label">Image Quality</label>
                         <select class="control" .value=${this.selectedImageQuality} @change=${this.handleImageQualitySelect}>

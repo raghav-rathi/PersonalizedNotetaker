@@ -48,3 +48,12 @@ test('relevant context respects summary, recent, earlier, and total limits', () 
     assert.match(context, /falcon/);
     assert.match(context, /Question 79/);
 });
+
+test('the context separates the question, the answer that was only suggested, and what I actually said', () => {
+    const records = [
+        { id: 's:turn:1', type: 'turn', timestamp: 1, transcription: 'Tell me about a project', ai_response: 'The research agent' },
+        { id: 's:me:1', type: 'transcript', speaker: 'me', timestamp: 2, transcription: 'Let me talk about Braindecode instead' },
+    ];
+    const context = buildRelevantContext({ query: 'Why that database?', records });
+    assert.match(context, /Question: Tell me about a project\nSuggested answer: The research agent[\s\S]*I said: Let me talk about Braindecode instead/);
+});

@@ -40,6 +40,24 @@ test('a failed turn leaves the conversation, and a new problem starts empty', ()
     assert.deepEqual(session.messagesThrough(fresh), [{ role: 'user', text: 'NEW PROBLEM', imageJpeg: null }]);
 });
 
+test('what I said goes before the question that followed it, even when it was written down after that question arrived', () => {
+    const session = new CodingSession();
+    session.startProblem();
+    const first = session.addTurn({ text: 'they said: tell me about a project', at: 1000 });
+    first.reply = 'LANE: MAIN\nThe research agent';
+    const followUp = session.addTurn({ text: 'they said: why that database?', at: 9000 });
+    session.addTurn({ text: 'I said: let me tell you about Braindecode instead', at: 8000 });
+    assert.deepEqual(
+        session.messagesThrough(followUp).map(message => `${message.role}: ${message.text}`),
+        [
+            'user: they said: tell me about a project',
+            'assistant: LANE: MAIN\nThe research agent',
+            'user: I said: let me tell you about Braindecode instead',
+            'user: they said: why that database?',
+        ]
+    );
+});
+
 test('the round picks its prompt, a copy in the settings folder wins, and other profiles keep the DSA round', t => {
     const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'round-prompt-'));
     t.after(() => fs.rmSync(configDir, { recursive: true, force: true }));

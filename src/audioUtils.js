@@ -1,8 +1,8 @@
 const fs = require('fs');
 const path = require('path');
 
-// Convert raw PCM to WAV format for easier playback and verification
-function pcmToWav(pcmBuffer, outputPath, sampleRate = 24000, channels = 1, bitDepth = 16) {
+// A WAV file in memory: a 44-byte header in front of raw PCM.
+function wavBuffer(pcmBuffer, sampleRate = 24000, channels = 1, bitDepth = 16) {
     const byteRate = sampleRate * channels * (bitDepth / 8);
     const blockAlign = channels * (bitDepth / 8);
     const dataSize = pcmBuffer.length;
@@ -29,12 +29,12 @@ function pcmToWav(pcmBuffer, outputPath, sampleRate = 24000, channels = 1, bitDe
     header.write('data', 36);
     header.writeUInt32LE(dataSize, 40); // Subchunk2Size
 
-    // Combine header and PCM data
-    const wavBuffer = Buffer.concat([header, pcmBuffer]);
+    return Buffer.concat([header, pcmBuffer]);
+}
 
-    // Write to file
-    fs.writeFileSync(outputPath, wavBuffer);
-
+// Convert raw PCM to WAV format for easier playback and verification
+function pcmToWav(pcmBuffer, outputPath, sampleRate = 24000, channels = 1, bitDepth = 16) {
+    fs.writeFileSync(outputPath, wavBuffer(pcmBuffer, sampleRate, channels, bitDepth));
     return outputPath;
 }
 
@@ -129,6 +129,7 @@ function saveDebugAudio(buffer, type, timestamp = Date.now()) {
 }
 
 module.exports = {
+    wavBuffer,
     pcmToWav,
     analyzeAudioBuffer,
     saveDebugAudio,
